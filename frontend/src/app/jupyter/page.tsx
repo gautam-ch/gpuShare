@@ -1,5 +1,5 @@
 "use client"
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, Suspense } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 
@@ -14,7 +14,7 @@ const PROGRESS_MESSAGES = [
   'Almost ready…',
 ]
 
-export default function JupyterPage() {
+function JupyterWorkspace() {
   const searchParams = useSearchParams()
   const [token, setToken] = useState('')
   const [url, setUrl] = useState('')
@@ -189,3 +189,10 @@ export default function JupyterPage() {
   )
 }
 
+export default function JupyterPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-[#030712] text-white flex items-center justify-center">Loading workspace...</div>}>
+      <JupyterWorkspace />
+    </Suspense>
+  )
+}
