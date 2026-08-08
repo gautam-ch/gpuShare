@@ -1,5 +1,6 @@
 "use client"
 import { useState } from 'react'
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000'
 
 export default function RentForm() {
   const [vram, setVram] = useState('')
@@ -13,7 +14,7 @@ export default function RentForm() {
     setLoading(true)
     setMessage('')
     try {
-      const res = await fetch('http://localhost:8000/rent', {
+      const res = await fetch(`${BACKEND_URL}/rent`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ vram_required: parseFloat(vram) })
