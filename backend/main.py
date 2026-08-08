@@ -14,8 +14,17 @@ import time
 from database import engine, SessionLocal, Base
 import models
 
-# Create database tables
+from sqlalchemy import text
+
+# Create database tables & auto-migrate schema
 Base.metadata.create_all(bind=engine)
+try:
+    with engine.connect() as conn:
+        conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS token VARCHAR;"))
+        conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS jupyter_url VARCHAR;"))
+        conn.commit()
+except Exception as e:
+    print(f"Schema migration note: {e}")
 
 app = FastAPI(title="GPU Sharing Backend")
 
