@@ -284,18 +284,22 @@ Write-Host ""
 
 # --- STEP 1: Install Tailscale ---
 Write-Host "[1/4] Checking Tailscale..." -ForegroundColor Yellow
-if (-not (Get-Command tailscale -ErrorAction SilentlyContinue)) {{
+if (-not (Get-Command tailscale -ErrorAction SilentlyContinue) -and -not (Test-Path "C:\Program Files\Tailscale\tailscale.exe")) {{
     Write-Host "    Installing Tailscale via winget..."
-    winget install tailscale.tailscale -e --silent
+    winget install tailscale.tailscale -e --silent --accept-source-agreements --accept-package-agreements
     Write-Host "    Tailscale installed. Please wait a moment..." -ForegroundColor Green
     Start-Sleep -Seconds 5
 }} else {{
     Write-Host "    Tailscale already installed." -ForegroundColor Green
 }}
 
+$TS_PATH = if (Get-Command tailscale -ErrorAction SilentlyContinue) {{ "tailscale" }} else {{ "C:\Program Files\Tailscale\tailscale.exe" }}
+
 Write-Host "[1/4] Connecting to Tailnet (automatic)..." -ForegroundColor Yellow
-{auth_key_cmd}
-$TailscaleIP = (tailscale ip -4 2>$null)
+$ps_auth_cmd = '{auth_key_cmd}'
+$ps_auth_cmd = $ps_auth_cmd -replace "tailscale", "`"$TS_PATH`""
+Invoke-Expression $ps_auth_cmd
+$TailscaleIP = (& $TS_PATH ip -4 2>$null)
 Write-Host "    Connected! Tailscale IP: $TailscaleIP" -ForegroundColor Green
 
 # --- STEP 2: Python dependencies ---
