@@ -1,0 +1,14 @@
+# Use this with: sky launch -c jupyter_node jupyter_skypilot.yaml
+resources:
+  accelerators: {VRAM: 4} # Request generic VRAM matching 
+  cpus: 2
+
+setup: |
+  # Install docker and nvidia container toolkit if not present
+  echo "Setting up docker..."
+
+run: |
+  # Run the container with hardware/volume access
+  docker run --rm -d -p 8888:8888 \
+    --gpus all \
+    jupyter/datascience-notebook:latest
