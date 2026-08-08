@@ -325,7 +325,7 @@ Write-Host ""
 Write-Host "Setup complete! Your machine will now appear on the platform." -ForegroundColor Green
 Write-Host "   Keep this window open. Press Ctrl+C to stop." -ForegroundColor Gray
 Write-Host ""
-$env:BACKEND_URL = "{BACKEND_PUBLIC_URL}"
+$env:BACKEND_URL = "{BACKEND_PUBLIC_URL}/heartbeat"
 python "$env:USERPROFILE\\gpu-agent.py"
 """
     return script

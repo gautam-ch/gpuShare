@@ -30,6 +30,8 @@ except ImportError:
     FLASK_AVAILABLE = False
 
 BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8000/heartbeat")
+if not BACKEND_URL.endswith("/heartbeat"):
+    BACKEND_URL = BACKEND_URL.rstrip("/") + "/heartbeat"
 
 # Generate or load a stable machine ID
 MACHINE_ID_FILE = "machine_id.txt"
@@ -44,14 +46,22 @@ else:
 
 def get_tailscale_ip():
     """Automatically retrieve this machine's Tailscale IPv4 address."""
-    try:
-        result = subprocess.run(
-            ['tailscale', 'ip', '-4'],
-            capture_output=True, text=True, check=True
-        )
-        return result.stdout.strip()
-    except Exception:
-        return "127.0.0.1"
+    cmd_candidates = [
+        ['tailscale', 'ip', '-4'],
+        [r'C:\Program Files\Tailscale\tailscale.exe', 'ip', '-4']
+    ]
+    for cmd in cmd_candidates:
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True, text=True, check=True
+            )
+            ip = result.stdout.strip()
+            if ip:
+                return ip
+        except Exception:
+            continue
+    return "127.0.0.1"
 
 
 def get_gpu_stats():
