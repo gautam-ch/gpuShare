@@ -74,8 +74,19 @@ async def receive_heartbeat(payload: HeartbeatPayload, db: Session = Depends(get
         )
         db.add(machine)
     
+    # Check if there are any pending jobs assigned to this machine
+    pending_jobs = db.query(models.Job).filter(
+        models.Job.machine_id == payload.machine_id,
+        models.Job.status == "pending"
+    ).all()
+
+    jobs_to_dispatch = []
+    for j in pending_jobs:
+        jobs_to_dispatch.append({"job_id": j.id, "token": j.token})
+        j.status = "assigned"
+    
     db.commit()
-    return {"status": "success"}
+    return {"status": "success", "jobs": jobs_to_dispatch}
 
 class RentRequest(BaseModel):
     vram_required: float
@@ -97,81 +108,77 @@ async def rent_gpu(req: RentRequest, db: Session = Depends(get_db)):
     if not machine:
         raise HTTPException(status_code=404, detail="No machines available with requested resources")
 
+    access_token = uuid.uuid4().hex
+
     # Create a job record
     new_job = models.Job(
         machine_id=machine.id,
         vram_required=vram_mb,
         cpus_required=req.cpus_required,
-        status="pending"
+        status="pending",
+        token=access_token
     )
     db.add(new_job)
     machine.vram_free_mb -= vram_mb
     db.commit()
     db.refresh(new_job)
 
-    # Generate a one-time access token
-    access_token = uuid.uuid4().hex
     token_store[access_token] = machine.id
 
     return {
         "message": "GPU reserved! Click 'Launch Jupyter' to start your session.",
         "access_token": access_token,
-        "jupyter_url": None  # Real URL assigned when Jupyter starts via Cloudflare tunnel
+        "jupyter_url": None
     }
 
 @app.post("/start-jupyter")
 async def start_jupyter(req: StartJupyterRequest, db: Session = Depends(get_db)):
-    """Tell the host agent to start a Jupyter container. Returns the live URL."""
-    machine_id = token_store.get(req.token)
-    if not machine_id:
+    """Find the job by token and return its job_id so frontend can poll status."""
+    job = db.query(models.Job).filter(models.Job.token == req.token).first()
+    if not job:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
-    machine = db.query(models.Machine).filter(models.Machine.id == machine_id).first()
-    if not machine:
-        raise HTTPException(status_code=404, detail="Machine not found")
+    machine = db.query(models.Machine).filter(models.Machine.id == job.machine_id).first()
 
-    # Tell the host agent to launch Jupyter + Cloudflare tunnel in background
-    try:
-        resp = http_requests.post(
-            f"http://{machine.tailscale_ip}:9000/run-jupyter",
-            json={"token": req.token, "machine_ip": machine.tailscale_ip},
-            timeout=10
-        )
-        resp.raise_for_status()
-        job_id = resp.json().get("job_id")
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Could not reach host agent: {e}")
+    if job.status == "done":
+        return {"status": "done", "jupyter_url": job.jupyter_url}
 
-    # Return job_id immediately — frontend polls /session-status/{job_id}
     return {
         "status": "pending",
-        "job_id": job_id,
-        "machine_tailscale_ip": machine.tailscale_ip
+        "job_id": str(job.id),
+        "machine_tailscale_ip": machine.tailscale_ip if machine else "127.0.0.1"
     }
 
+class CompleteJobPayload(BaseModel):
+    job_id: int
+    status: str
+    jupyter_url: str = None
+    detail: str = None
 
-class SessionStatusRequest(BaseModel):
-    pass
+@app.post("/complete-job")
+async def complete_job(payload: CompleteJobPayload, db: Session = Depends(get_db)):
+    """Host agent posts completion result (URL or error) back to backend."""
+    job = db.query(models.Job).filter(models.Job.id == payload.job_id).first()
+    if job:
+        job.status = payload.status
+        job.jupyter_url = payload.jupyter_url if payload.status == "done" else payload.detail
+        db.commit()
+    return {"status": "success"}
 
 @app.get("/session-status/{job_id}")
-async def session_status(job_id: str, machine_ip: str, db: Session = Depends(get_db)):
-    """
-    Frontend polls this to check if Jupyter + Cloudflare tunnel is ready.
-    Proxies to the host agent's /job-status/<job_id>.
-    """
+async def session_status(job_id: str, machine_ip: str = "127.0.0.1", db: Session = Depends(get_db)):
+    """Frontend polls this to check if Jupyter + Cloudflare tunnel is ready."""
     try:
-        poll = http_requests.get(
-            f"http://{machine_ip}:9000/job-status/{job_id}",
-            timeout=5
-        )
-        result = poll.json()
-        if result.get("status") == "done":
-            return {"status": "done", "jupyter_url": result["public_url"]}
-        elif result.get("status") == "error":
-            return {"status": "error", "detail": result.get("detail")}
-        return {"status": "pending"}
-    except Exception as e:
-        return {"status": "pending"}  # Transient — keep polling
+        j_id = int(job_id)
+        job = db.query(models.Job).filter(models.Job.id == j_id).first()
+        if job:
+            if job.status == "done":
+                return {"status": "done", "jupyter_url": job.jupyter_url}
+            elif job.status == "error":
+                return {"status": "error", "detail": job.jupyter_url or "Failed to launch Jupyter"}
+    except Exception:
+        pass
+    return {"status": "pending"}
 
 
 @app.get("/machines")

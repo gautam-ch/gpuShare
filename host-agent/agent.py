@@ -82,7 +82,7 @@ def get_gpu_stats():
 
 
 def send_heartbeat():
-    """Send a heartbeat payload to the backend."""
+    """Send a heartbeat payload to the backend and handle dispatched jobs."""
     stats = get_gpu_stats()
     tailscale_ip = get_tailscale_ip()
     payload = {
@@ -93,17 +93,28 @@ def send_heartbeat():
     }
     try:
         resp = requests.post(BACKEND_URL, json=payload, timeout=5)
-        print(f"[{time.strftime('%X')}] Heartbeat → {resp.status_code} | VRAM free: {stats['vram_free_mb']:.0f}MB | IP: {tailscale_ip}")
+        if resp.status_code == 200:
+            data = resp.json()
+            dispatched = data.get("jobs", [])
+            for job in dispatched:
+                j_id = str(job.get("job_id"))
+                t_token = job.get("token")
+                print(f"[Agent] Received new job #{j_id}! Starting Jupyter background task...")
+                threading.Thread(target=_launch_jupyter_bg, args=(j_id, t_token, tailscale_ip), daemon=True).start()
+
+            print(f"[{time.strftime('%X')}] Heartbeat → 200 | VRAM free: {stats['vram_free_mb']:.0f}MB | IP: {tailscale_ip}")
+        else:
+            print(f"[{time.strftime('%X')}] Heartbeat → {resp.status_code} | VRAM free: {stats['vram_free_mb']:.0f}MB")
     except Exception as e:
         print(f"[{time.strftime('%X')}] Heartbeat FAILED: {e}")
 
 
 def heartbeat_loop():
-    """Background thread: send heartbeats every 15 seconds."""
+    """Background thread: send heartbeats every 3 seconds to quickly pick up jobs."""
     print(f"[Agent] Starting. Machine ID: {MACHINE_ID}")
     while True:
         send_heartbeat()
-        time.sleep(15)
+        time.sleep(3)
 
 
 # ---- FLASK COMMAND SERVER ----
@@ -238,9 +249,21 @@ if FLASK_AVAILABLE:
             job_store[job_id] = {"status": "done", "public_url": public_url}
             print(f"[Agent] [{job_id}] Ready -> {public_url}")  # ASCII arrow, safe on Windows
 
+            # Notify central backend of completion
+            try:
+                complete_url = BACKEND_URL.replace("/heartbeat", "/complete-job")
+                requests.post(complete_url, json={"job_id": int(job_id), "status": "done", "jupyter_url": public_url}, timeout=5)
+            except Exception as err:
+                print(f"[Agent] Failed to report job completion: {err}")
+
         except Exception as e:
             job_store[job_id] = {"status": "error", "detail": str(e)}
             print(f"[Agent] [{job_id}] FAILED: {e}")
+            try:
+                complete_url = BACKEND_URL.replace("/heartbeat", "/complete-job")
+                requests.post(complete_url, json={"job_id": int(job_id), "status": "error", "detail": str(e)}, timeout=5)
+            except Exception:
+                pass
 
     @flask_app.route("/run-jupyter", methods=["POST"])
     def run_jupyter():

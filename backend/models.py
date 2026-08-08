@@ -21,6 +21,8 @@ class Job(Base):
     machine_id = Column(String, ForeignKey("machines.id"))
     vram_required = Column(Float)
     cpus_required = Column(Integer)
-    status = Column(String, default="running") # running, stopped, failed
-    
+    status = Column(String, default="pending") # pending, assigned, done, error
+    token = Column(String, index=True, nullable=True)
+    jupyter_url = Column(String, nullable=True)
+
     machine = relationship("Machine")
