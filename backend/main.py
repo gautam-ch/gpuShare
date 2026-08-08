@@ -42,7 +42,7 @@ app.add_middleware(
 #   BACKEND_PUBLIC_URL – the public URL or Tailscale IP of THIS backend server
 # ---------------------------------------------------------------
 TAILSCALE_AUTHKEY = os.environ.get("TAILSCALE_AUTHKEY", "")
-BACKEND_PUBLIC_URL = os.environ.get("BACKEND_PUBLIC_URL", "http://localhost:8000")
+BACKEND_PUBLIC_URL = os.environ.get("BACKEND_PUBLIC_URL", "http://localhost:8000").rstrip("/")
 
 # In-memory token store: token -> machine_id
 token_store: dict = {}
@@ -108,8 +108,11 @@ class StartJupyterRequest(BaseModel):
 async def rent_gpu(req: RentRequest, db: Session = Depends(get_db)):
     """Match a machine by VRAM, create a job, return a one-time token and Jupyter URL."""
     vram_mb = req.vram_required * 1024  # convert GB to MB
+    # Ensure machine sent a heartbeat within the last 60 seconds
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(seconds=60)
     machine = db.query(models.Machine).filter(
         models.Machine.status == "online",
+        models.Machine.last_heartbeat >= cutoff,
         models.Machine.vram_free_mb >= vram_mb,
         models.Machine.cpus >= req.cpus_required
     ).first()
