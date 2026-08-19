@@ -421,12 +421,22 @@ def heartbeat_loop():
 if FLASK_AVAILABLE:
     flask_app = Flask(__name__)
 
-    def start_cloudflare_tunnel(port: int, machine_ip: str = "127.0.0.1") -> str:
+    # Active tunnel processes: token -> subprocess.Popen (one per concurrent pod)
+    active_tunnels: dict = {}
+
+    def start_cloudflare_tunnel(port: int, token: str = "", machine_ip: str = "127.0.0.1") -> str:
         """
-        Start a Cloudflare quick tunnel (no account needed).
-        For localhost testing, skip the tunnel and return localhost URL directly.
+        Start an independent Cloudflare quick tunnel for this specific pod.
+        Tracks each tunnel process per token so multiple pods run simultaneously without killing each other.
         """
         import platform, re, queue, threading as _th
+
+        # If re-renting the exact same token, close its old tunnel
+        if token and token in active_tunnels:
+            try:
+                active_tunnels[token].terminate()
+            except Exception:
+                pass
 
         # LOCAL SHORTCUT: skip Cloudflare for localhost testing
         if machine_ip in ("127.0.0.1", "localhost"):
@@ -455,15 +465,6 @@ if FLASK_AVAILABLE:
                 os.chmod(cf_binary, 0o755)
             print("[Agent] cloudflared downloaded.")
 
-        # Terminate any stale cloudflared instances first
-        try:
-            if os.name == 'nt':
-                subprocess.run(["taskkill", "/F", "/IM", "cloudflared.exe"], capture_output=True)
-            else:
-                subprocess.run(["pkill", "-f", "cloudflared"], capture_output=True)
-        except Exception:
-            pass
-
         proc = subprocess.Popen(
             [cf_binary, "tunnel", "--url", f"http://127.0.0.1:{port}"],
             stdout=subprocess.PIPE,
@@ -472,6 +473,7 @@ if FLASK_AVAILABLE:
             encoding="utf-8",
             errors="replace"
         )
+        active_tunnels[token] = proc
 
         found_q = queue.Queue()
         url_pattern = re.compile(r'https://[a-zA-Z0-9\-]+\.trycloudflare\.com')
@@ -495,7 +497,7 @@ if FLASK_AVAILABLE:
             proc.kill()
             raise RuntimeError("Cloudflare tunnel did not produce a URL within 30s")
 
-        print(f"[Agent] Cloudflare tunnel active: {public_url}")
+        print(f"[Agent] Cloudflare tunnel active on port {port}: {public_url}")
         return public_url
 
     # In-memory job store: job_id -> {"status": "pending|done|error", "public_url": str}
@@ -505,12 +507,11 @@ if FLASK_AVAILABLE:
         """
         Pick the best available image on this machine.
         Priority: our pre-baked GPU image > tensorflow > scipy > base
-        All have Jupyter; only our custom one has torch pre-installed.
         """
         preferred_order = [
-            "gpushare/gpu-jupyter:latest",      # Our custom pre-baked image
-            "gpu-jupyter:latest",               # Locally built variant
-            "jupyter/tensorflow-notebook",      # Has many ML libs
+            "gpu-jupyter:latest",               # Pre-baked local image with PyTorch
+            "gpushare/gpu-jupyter:latest",
+            "jupyter/tensorflow-notebook",      # TensorFlow image
             "jupyter/scipy-notebook:latest",    # Fallback
             "jupyter/scipy-notebook",
             DOCKER_IMAGE,
@@ -535,30 +536,29 @@ if FLASK_AVAILABLE:
     ):
         """
         Background thread:
-        1. Clean up any stale jupyter containers
-        2. Find a free port (supports multiple instances)
-        3. Apply Docker cgroup resource caps (CPU + RAM)
-        4. Start container with GPU passthrough
-        5. Wait for Jupyter HTTP server to be fully ready
-        6. Create Cloudflare tunnel for public access
+        1. Find a free port (supports multiple instances simultaneously)
+        2. Apply Docker cgroup resource caps (CPU + RAM)
+        3. Start container with GPU passthrough
+        4. Wait for Jupyter HTTP server to be fully ready
+        5. Create dedicated Cloudflare tunnel for this specific pod
         """
         try:
             client = docker.from_env()
 
-            # Cleanup: stop all existing jupyter containers to free ports and VRAM
+            # Dynamic port allocation (unique per pod)
+            host_port = find_free_port()
+            container_name = f"jupyter-{token[:8]}"
+            image_to_use = _get_target_image(client)
+
+            # Cleanup ONLY if exact same container name already exists (re-rent scenario)
             for c in client.containers.list(all=True):
-                if c.name.startswith("jupyter-"):
-                    print(f"[Agent] Cleaning up previous container: {c.name}")
+                if c.name == container_name:
+                    print(f"[Agent] Replacing existing container with same token: {c.name}")
                     try:
                         c.stop(timeout=2)
                         c.remove(force=True)
                     except Exception:
                         pass
-
-            # Dynamic port allocation
-            host_port = find_free_port()
-            container_name = f"jupyter-{token[:8]}"
-            image_to_use = _get_target_image(client)
 
             # GPU passthrough
             device_requests = []
@@ -570,7 +570,7 @@ if FLASK_AVAILABLE:
             cpu_quota = cpu_cores * cpu_period
             mem_limit = f"{ram_gb}g"
 
-            print(f"[Agent] [{job_id}] Launching '{image_to_use}' on port {host_port} "
+            print(f"[Agent] [{job_id}] Launching concurrent pod '{container_name}' on port {host_port} "
                   f"(Caps: {cpu_cores} CPUs, {ram_gb}GB RAM, GPU: {'Yes' if GPU_AVAILABLE else 'No'})...")
 
             container = client.containers.run(
@@ -598,17 +598,17 @@ if FLASK_AVAILABLE:
                     "--NotebookApp.disable_check_xsrf=True",
                 ]
             )
-            print(f"[Agent] [{job_id}] Container up: {container.short_id} on port {host_port}")
+            print(f"[Agent] [{job_id}] Pod online: {container.short_id} on port {host_port}")
 
-            # Actively poll until Jupyter is ready and responding
-            print(f"[Agent] [{job_id}] Waiting for Jupyter to be ready on 127.0.0.1:{host_port}...")
+            # Actively poll until this pod's Jupyter is ready
+            print(f"[Agent] [{job_id}] Waiting for pod on 127.0.0.1:{host_port}...")
             is_ready = False
             for attempt in range(30):
                 try:
                     r = requests.get(f"http://127.0.0.1:{host_port}/", timeout=1)
                     if r.status_code in [200, 302, 403]:
                         is_ready = True
-                        print(f"[Agent] [{job_id}] Jupyter is alive and responding (HTTP {r.status_code})!")
+                        print(f"[Agent] [{job_id}] Pod is ready on port {host_port} (HTTP {r.status_code})!")
                         break
                 except Exception:
                     pass
@@ -617,12 +617,12 @@ if FLASK_AVAILABLE:
             if not is_ready:
                 print(f"[Agent] [{job_id}] Warning: Jupyter HTTP ping timed out, starting tunnel anyway...")
 
-            # Start Cloudflare quick tunnel to dynamic port
-            tunnel_url = start_cloudflare_tunnel(host_port, machine_ip=machine_ip)
+            # Start dedicated Cloudflare quick tunnel for this specific pod
+            tunnel_url = start_cloudflare_tunnel(host_port, token=token, machine_ip=machine_ip)
             public_url = f"{tunnel_url}?token={token}"
 
             job_store[job_id] = {"status": "done", "public_url": public_url}
-            print(f"[Agent] [{job_id}] Ready -> {public_url}")
+            print(f"[Agent] [{job_id}] Pod ready -> {public_url}")
 
             # Notify central backend of completion
             try:
