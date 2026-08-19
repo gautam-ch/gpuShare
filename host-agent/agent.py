@@ -573,6 +573,29 @@ if FLASK_AVAILABLE:
             print(f"[Agent] [{job_id}] Launching concurrent pod '{container_name}' on port {host_port} "
                   f"(Caps: {cpu_cores} CPUs, {ram_gb}GB RAM, GPU: {'Yes' if GPU_AVAILABLE else 'No'})...")
 
+            # Launch command compatible with both custom CUDA image and official jupyter stacks
+            if "gpu-jupyter" in image_to_use:
+                cmd = [
+                    "python3", "-m", "notebook",
+                    "--ip=0.0.0.0",
+                    "--port=8888",
+                    "--no-browser",
+                    f"--NotebookApp.token={token}",
+                    "--NotebookApp.allow_origin=*",
+                    "--NotebookApp.allow_remote_access=True",
+                    "--NotebookApp.disable_check_xsrf=True",
+                    "--NotebookApp.tornado_settings={\"headers\":{\"Content-Security-Policy\":\"frame-ancestors *\"}}",
+                ]
+            else:
+                cmd = [
+                    "start-notebook.sh",
+                    f"--NotebookApp.token={token}",
+                    "--NotebookApp.allow_origin=*",
+                    "--NotebookApp.allow_remote_access=True",
+                    "--NotebookApp.tornado_settings={\"headers\":{\"Content-Security-Policy\":\"frame-ancestors *\"}}",
+                    "--NotebookApp.disable_check_xsrf=True",
+                ]
+
             container = client.containers.run(
                 image_to_use,
                 detach=True,
@@ -589,14 +612,7 @@ if FLASK_AVAILABLE:
                 },
                 remove=True,
                 name=container_name,
-                command=[
-                    "start-notebook.sh",
-                    f"--NotebookApp.token={token}",
-                    "--NotebookApp.allow_origin=*",
-                    "--NotebookApp.allow_remote_access=True",
-                    "--NotebookApp.tornado_settings={\"headers\":{\"Content-Security-Policy\":\"frame-ancestors *\"}}",
-                    "--NotebookApp.disable_check_xsrf=True",
-                ]
+                command=cmd
             )
             print(f"[Agent] [{job_id}] Pod online: {container.short_id} on port {host_port}")
 

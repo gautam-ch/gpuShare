@@ -51,6 +51,10 @@ RUN useradd -m -s /bin/bash -u 1000 jovyan && \
     echo "jovyan ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/jovyan && \
     chmod 0440 /etc/sudoers.d/jovyan
 
+# 4. Universal start-notebook.sh wrapper script
+RUN echo '#!/bin/bash\nexec python3 -m notebook --ip=0.0.0.0 --port=8888 --no-browser "$@"' > /usr/local/bin/start-notebook.sh && \
+    chmod +x /usr/local/bin/start-notebook.sh
+
 USER jovyan
 WORKDIR /home/jovyan
 
