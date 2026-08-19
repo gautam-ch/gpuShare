@@ -93,21 +93,23 @@ async def receive_heartbeat(payload: HeartbeatPayload, db: Session = Depends(get
         )
         db.add(machine)
     
-    # Check if there are any pending or assigned jobs for this machine
-    uncompleted_jobs = db.query(models.Job).filter(
+    # Only dispatch PENDING jobs — 'assigned' means already sent to agent
+    # Once dispatched we flip to 'assigned' immediately so the next heartbeat
+    # (3s later) does NOT re-send the same job again.
+    pending_jobs = db.query(models.Job).filter(
         models.Job.machine_id == payload.machine_id,
-        models.Job.status.in_(["pending", "assigned"])
+        models.Job.status == "pending"   # <-- ONLY pending, NOT assigned
     ).all()
 
     jobs_to_dispatch = []
-    for j in uncompleted_jobs:
+    for j in pending_jobs:
         jobs_to_dispatch.append({
             "job_id": j.id,
             "token": j.token,
             "cpu_cores": j.cpu_cores if j.cpu_cores else 2,
             "ram_gb": j.ram_gb if j.ram_gb else 8,
         })
-        j.status = "assigned"
+        j.status = "assigned"  # Flip immediately — won't be re-dispatched
     
     db.commit()
     return {"status": "success", "jobs": jobs_to_dispatch}
