@@ -22,6 +22,9 @@ try:
     with engine.connect() as conn:
         conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS token VARCHAR;"))
         conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS jupyter_url VARCHAR;"))
+        conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS cpu_cores INTEGER DEFAULT 2;"))
+        conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS ram_gb INTEGER DEFAULT 8;"))
+        conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS started_at TIMESTAMP DEFAULT NOW();"))
         conn.commit()
 except Exception as e:
     print(f"Schema migration note: {e}")
@@ -83,15 +86,20 @@ async def receive_heartbeat(payload: HeartbeatPayload, db: Session = Depends(get
         )
         db.add(machine)
     
-    # Check if there are any pending jobs assigned to this machine
-    pending_jobs = db.query(models.Job).filter(
+    # Check if there are any pending or assigned jobs for this machine
+    uncompleted_jobs = db.query(models.Job).filter(
         models.Job.machine_id == payload.machine_id,
-        models.Job.status == "pending"
+        models.Job.status.in_(["pending", "assigned"])
     ).all()
 
     jobs_to_dispatch = []
-    for j in pending_jobs:
-        jobs_to_dispatch.append({"job_id": j.id, "token": j.token})
+    for j in uncompleted_jobs:
+        jobs_to_dispatch.append({
+            "job_id": j.id,
+            "token": j.token,
+            "cpu_cores": j.cpu_cores if j.cpu_cores else 2,
+            "ram_gb": j.ram_gb if j.ram_gb else 8,
+        })
         j.status = "assigned"
     
     db.commit()
@@ -100,6 +108,8 @@ async def receive_heartbeat(payload: HeartbeatPayload, db: Session = Depends(get
 class RentRequest(BaseModel):
     vram_required: float
     cpus_required: int = 1
+    cpu_cores: int = 2    # CPU cores to allocate to the container
+    ram_gb: int = 8       # RAM in GB to allocate to the container
 
 class StartJupyterRequest(BaseModel):
     token: str
@@ -122,11 +132,13 @@ async def rent_gpu(req: RentRequest, db: Session = Depends(get_db)):
 
     access_token = uuid.uuid4().hex
 
-    # Create a job record
+    # Create a job record with resource caps
     new_job = models.Job(
         machine_id=machine.id,
         vram_required=vram_mb,
         cpus_required=req.cpus_required,
+        cpu_cores=req.cpu_cores,
+        ram_gb=req.ram_gb,
         status="pending",
         token=access_token
     )
@@ -196,6 +208,7 @@ async def session_status(job_id: str, machine_ip: str = "127.0.0.1", db: Session
 @app.get("/machines")
 async def list_machines(db: Session = Depends(get_db)):
     """Return all registered machines — used by the host page to detect when agent connects."""
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(seconds=60)
     machines = db.query(models.Machine).all()
     return [
         {
@@ -204,10 +217,86 @@ async def list_machines(db: Session = Depends(get_db)):
             "vram_total_mb": m.vram_total_mb,
             "vram_free_mb": m.vram_free_mb,
             "cpus": m.cpus,
-            "status": m.status,
+            "status": m.status if m.last_heartbeat and m.last_heartbeat >= cutoff else "offline",
+            "last_heartbeat": m.last_heartbeat.isoformat() if m.last_heartbeat else None,
         }
         for m in machines
     ]
+
+
+# ---------------------------------------------------------------
+# ADMIN DASHBOARD ENDPOINTS
+# ---------------------------------------------------------------
+
+@app.get("/admin/machines")
+async def admin_machines(db: Session = Depends(get_db)):
+    """Admin: return all machines with live/offline status based on heartbeat recency."""
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(seconds=60)
+    machines = db.query(models.Machine).all()
+    result = []
+    for m in machines:
+        is_live = m.last_heartbeat and m.last_heartbeat >= cutoff
+        seconds_ago = None
+        if m.last_heartbeat:
+            seconds_ago = int((datetime.datetime.utcnow() - m.last_heartbeat).total_seconds())
+        result.append({
+            "id": m.id,
+            "tailscale_ip": m.tailscale_ip,
+            "vram_total_mb": m.vram_total_mb,
+            "vram_free_mb": m.vram_free_mb,
+            "vram_used_mb": (m.vram_total_mb or 0) - (m.vram_free_mb or 0),
+            "cpus": m.cpus,
+            "status": "online" if is_live else "offline",
+            "last_heartbeat_seconds_ago": seconds_ago,
+        })
+    return result
+
+
+@app.get("/admin/jobs")
+async def admin_jobs(db: Session = Depends(get_db)):
+    """Admin: return all jobs (active and recent) with machine info."""
+    jobs = db.query(models.Job).order_by(models.Job.id.desc()).limit(100).all()
+    result = []
+    for j in jobs:
+        started_ago = None
+        if j.started_at:
+            started_ago = int((datetime.datetime.utcnow() - j.started_at).total_seconds())
+        result.append({
+            "id": j.id,
+            "machine_id": j.machine_id,
+            "status": j.status,
+            "vram_required_mb": j.vram_required,
+            "cpu_cores": j.cpu_cores,
+            "ram_gb": j.ram_gb,
+            "jupyter_url": j.jupyter_url,
+            "started_at": j.started_at.isoformat() if j.started_at else None,
+            "started_seconds_ago": started_ago,
+        })
+    return result
+
+
+@app.get("/admin/stats")
+async def admin_stats(db: Session = Depends(get_db)):
+    """Admin: aggregate platform stats."""
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(seconds=60)
+    machines = db.query(models.Machine).all()
+    live_machines = [m for m in machines if m.last_heartbeat and m.last_heartbeat >= cutoff]
+
+    active_jobs = db.query(models.Job).filter(models.Job.status.in_(["pending", "assigned", "done"])).all()
+    running_jobs = [j for j in active_jobs if j.status == "done" and j.jupyter_url]
+
+    total_vram = sum(m.vram_total_mb or 0 for m in live_machines)
+    free_vram = sum(m.vram_free_mb or 0 for m in live_machines)
+
+    return {
+        "total_machines": len(machines),
+        "online_machines": len(live_machines),
+        "offline_machines": len(machines) - len(live_machines),
+        "active_renters": len(running_jobs),
+        "total_vram_mb": total_vram,
+        "free_vram_mb": free_vram,
+        "used_vram_mb": total_vram - free_vram,
+    }
 
 @app.get("/install-script", response_class=PlainTextResponse)
 async def install_script_linux():

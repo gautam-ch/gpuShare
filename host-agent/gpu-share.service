@@ -1,0 +1,23 @@
+[Unit]
+Description=GPU Share Hub — Provider Agent
+Documentation=https://github.com/gautam-ch/gpuShare
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+# Run as the current user (replace 'ubuntu' with your Linux username)
+User=%i
+WorkingDirectory=/home/%i
+ExecStart=/usr/bin/python3 /home/%i/gpu-agent.py
+Restart=always
+RestartSec=10
+Environment=BACKEND_URL=https://gpushare-backend.onrender.com/heartbeat
+
+# Logging — view with: journalctl -u gpu-share@ubuntu -f
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gpu-share
+
+[Install]
+WantedBy=multi-user.target
