@@ -120,6 +120,27 @@ def get_system_hardware():
     }
 
 
+def console_input(prompt_text=""):
+    """
+    Read input directly from the console window.
+    Works even when the script was piped (e.g. irm ... | iex or curl | bash).
+    """
+    sys.stdout.write(prompt_text)
+    sys.stdout.flush()
+    try:
+        if sys.stdin.isatty():
+            return sys.stdin.readline().strip()
+        # Direct console input for piped shells
+        if os.name == 'nt':
+            with open('CONIN$', 'r') as con:
+                return con.readline().strip()
+        else:
+            with open('/dev/tty', 'r') as con:
+                return con.readline().strip()
+    except Exception:
+        return ""
+
+
 def prompt_number(prompt_text, min_val, max_val, default_val, is_float=False):
     """
     Prompt user for a numeric value within [min_val, max_val].
@@ -127,7 +148,7 @@ def prompt_number(prompt_text, min_val, max_val, default_val, is_float=False):
     """
     while True:
         try:
-            val_str = input(f"{prompt_text} [Available: {max_val}, Default: {default_val}]: ").strip()
+            val_str = console_input(f"{prompt_text} [Available: {max_val}, Default: {default_val}]: ")
             if not val_str:
                 return default_val
             val = float(val_str) if is_float else int(val_str)
@@ -145,7 +166,7 @@ def load_or_prompt_config():
     """
     hw = get_system_hardware()
     reconfigure = "--reconfigure" in sys.argv or "-r" in sys.argv
-    non_interactive = "--yes" in sys.argv or "-y" in sys.argv or not sys.stdin.isatty()
+    non_interactive = "--yes" in sys.argv or "-y" in sys.argv or os.environ.get("HEADLESS") == "1"
 
     # Load existing config if available and not reconfiguring
     if os.path.exists(CONFIG_FILE) and not reconfigure:
@@ -165,7 +186,7 @@ def load_or_prompt_config():
         except Exception:
             pass
 
-    # Headless / Background service fallback
+    # Explicit headless mode
     if non_interactive and not reconfigure:
         cfg = {
             "shared_vram_gb": hw["total_vram_gb"],
