@@ -455,6 +455,15 @@ if FLASK_AVAILABLE:
                 os.chmod(cf_binary, 0o755)
             print("[Agent] cloudflared downloaded.")
 
+        # Terminate any stale cloudflared instances first
+        try:
+            if os.name == 'nt':
+                subprocess.run(["taskkill", "/F", "/IM", "cloudflared.exe"], capture_output=True)
+            else:
+                subprocess.run(["pkill", "-f", "cloudflared"], capture_output=True)
+        except Exception:
+            pass
+
         proc = subprocess.Popen(
             [cf_binary, "tunnel", "--url", f"http://127.0.0.1:{port}"],
             stdout=subprocess.PIPE,
@@ -492,6 +501,23 @@ if FLASK_AVAILABLE:
     # In-memory job store: job_id -> {"status": "pending|done|error", "public_url": str}
     job_store: dict = {}
 
+    def _get_target_image(client):
+        """Pick an image already cached locally to avoid downloading GBs."""
+        preferred_order = [
+            "jupyter/tensorflow-notebook",
+            "jupyter/scipy-notebook:latest",
+            "jupyter/scipy-notebook",
+            DOCKER_IMAGE,
+            "jupyter/base-notebook"
+        ]
+        for img in preferred_order:
+            try:
+                client.images.get(img)
+                return img
+            except Exception:
+                pass
+        return DOCKER_IMAGE
+
     def _launch_jupyter_bg(
         job_id: str,
         token: str,
@@ -501,28 +527,30 @@ if FLASK_AVAILABLE:
     ):
         """
         Background thread:
-        1. Find a free port (supports multiple instances on same machine)
-        2. Apply Docker cgroup resource caps (CPU + RAM)
-        3. Start container with GPU passthrough
-        4. Wait for Jupyter HTTP server to be fully ready
-        5. Create Cloudflare tunnel for public access
+        1. Clean up any stale jupyter containers
+        2. Find a free port (supports multiple instances)
+        3. Apply Docker cgroup resource caps (CPU + RAM)
+        4. Start container with GPU passthrough
+        5. Wait for Jupyter HTTP server to be fully ready
+        6. Create Cloudflare tunnel for public access
         """
         try:
             client = docker.from_env()
 
-            # Dynamic port allocation: find a free port for this job
-            host_port = find_free_port()
-            container_name = f"jupyter-{token[:8]}"
-
-            # Cleanup: remove any existing container with same name
+            # Cleanup: stop all existing jupyter containers to free ports and VRAM
             for c in client.containers.list(all=True):
-                if c.name == container_name:
-                    print(f"[Agent] Removing existing container: {c.name}")
+                if c.name.startswith("jupyter-"):
+                    print(f"[Agent] Cleaning up previous container: {c.name}")
                     try:
-                        c.stop(timeout=3)
+                        c.stop(timeout=2)
                         c.remove(force=True)
                     except Exception:
                         pass
+
+            # Dynamic port allocation
+            host_port = find_free_port()
+            container_name = f"jupyter-{token[:8]}"
+            image_to_use = _get_target_image(client)
 
             # GPU passthrough
             device_requests = []
@@ -534,11 +562,11 @@ if FLASK_AVAILABLE:
             cpu_quota = cpu_cores * cpu_period
             mem_limit = f"{ram_gb}g"
 
-            print(f"[Agent] [{job_id}] Launching container on port {host_port} "
-                  f"(Capped at: {cpu_cores} CPUs, {ram_gb}GB RAM, GPU: {'Yes' if GPU_AVAILABLE else 'No'})...")
+            print(f"[Agent] [{job_id}] Launching '{image_to_use}' on port {host_port} "
+                  f"(Caps: {cpu_cores} CPUs, {ram_gb}GB RAM, GPU: {'Yes' if GPU_AVAILABLE else 'No'})...")
 
             container = client.containers.run(
-                DOCKER_IMAGE,
+                image_to_use,
                 detach=True,
                 ports={"8888/tcp": host_port},
                 cpu_period=cpu_period,
@@ -567,7 +595,7 @@ if FLASK_AVAILABLE:
             # Actively poll until Jupyter is ready and responding
             print(f"[Agent] [{job_id}] Waiting for Jupyter to be ready on 127.0.0.1:{host_port}...")
             is_ready = False
-            for attempt in range(25):
+            for attempt in range(30):
                 try:
                     r = requests.get(f"http://127.0.0.1:{host_port}/", timeout=1)
                     if r.status_code in [200, 302, 403]:
@@ -579,7 +607,7 @@ if FLASK_AVAILABLE:
                 time.sleep(1)
 
             if not is_ready:
-                print(f"[Agent] [{job_id}] Warning: Jupyter readiness check timed out, proceeding with tunnel...")
+                print(f"[Agent] [{job_id}] Warning: Jupyter HTTP ping timed out, starting tunnel anyway...")
 
             # Start Cloudflare quick tunnel to dynamic port
             tunnel_url = start_cloudflare_tunnel(host_port, machine_ip=machine_ip)
