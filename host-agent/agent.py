@@ -2,11 +2,12 @@
 Host Agent - GPU Share Hub
 ====================================
 Phase 2 Features:
+  - Interactive CLI onboarding with strict hardware validation
+  - Persistent host_config.json for provider resource limits
   - Pre-pulls Docker image on startup (fast launch, ~20s instead of 10min)
   - Dynamic port allocation per job (supports multiple renters on same machine)
   - Resource caps per container (CPU, RAM enforced via Docker cgroups)
   - /shutdown endpoint for graceful host exit
-  - Idle detection: only available when GPU/CPU usage is low
 """
 
 import time
@@ -14,6 +15,8 @@ import requests
 import subprocess
 import uuid
 import os
+import sys
+import json
 import threading
 import socket
 
@@ -36,12 +39,14 @@ BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8000/heartbeat")
 if not BACKEND_URL.endswith("/heartbeat"):
     BACKEND_URL = BACKEND_URL.rstrip("/") + "/heartbeat"
 
-# Docker image — our pre-baked image with PyTorch CUDA 12.1 + common ML libs
-# Falls back to scipy-notebook if custom image not available
+# Docker image — pre-baked image with PyTorch CUDA 12.1 + common ML libs
 DOCKER_IMAGE = os.environ.get("DOCKER_IMAGE", "jupyter/scipy-notebook:latest")
 
 # Generate or load a stable machine ID
-MACHINE_ID_FILE = os.path.join(os.path.dirname(__file__) if "__file__" in dir() else ".", "machine_id.txt")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__)) if "__file__" in dir() else "."
+MACHINE_ID_FILE = os.path.join(BASE_DIR, "machine_id.txt")
+CONFIG_FILE = os.path.join(BASE_DIR, "host_config.json")
+
 if os.path.exists(MACHINE_ID_FILE):
     with open(MACHINE_ID_FILE, 'r') as f:
         MACHINE_ID = f.read().strip()
@@ -49,6 +54,190 @@ else:
     MACHINE_ID = f"node-{uuid.uuid4().hex[:6]}"
     with open(MACHINE_ID_FILE, 'w') as f:
         f.write(MACHINE_ID)
+
+
+# ---------------------------------------------------------------
+# HARDWARE DETECTION & INTERACTIVE CLI ONBOARDING
+# ---------------------------------------------------------------
+
+def get_system_hardware():
+    """Detect physical hardware capabilities (CPU, RAM, GPU VRAM)."""
+    # 1. Total CPU cores
+    total_cpus = os.cpu_count() or 4
+
+    # 2. Total System RAM in GB
+    total_ram_gb = 8.0
+    try:
+        if os.name == 'nt':
+            import ctypes
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ('dwLength', ctypes.c_ulong),
+                    ('dwMemoryLoad', ctypes.c_ulong),
+                    ('ullTotalPhys', ctypes.c_ulonglong),
+                    ('ullAvailPhys', ctypes.c_ulonglong),
+                    ('ullTotalPageFile', ctypes.c_ulonglong),
+                    ('ullAvailPageFile', ctypes.c_ulonglong),
+                    ('ullTotalVirtual', ctypes.c_ulonglong),
+                    ('ullAvailVirtual', ctypes.c_ulonglong),
+                    ('sullAvailExtendedVirtual', ctypes.c_ulonglong),
+                ]
+            stat = MEMORYSTATUSEX()
+            stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat))
+            total_ram_gb = round(stat.ullTotalPhys / (1024**3), 1)
+        else:
+            with open('/proc/meminfo', 'r') as f:
+                for line in f:
+                    if 'MemTotal' in line:
+                        total_ram_gb = round(int(line.split()[1]) / (1024**2), 1)
+                        break
+    except Exception:
+        total_ram_gb = 8.0
+
+    # 3. GPU VRAM & Model Name
+    gpu_name = "No NVIDIA GPU Detected (Mock Mode)"
+    total_vram_gb = 8.0
+    if GPU_AVAILABLE:
+        try:
+            pynvml.nvmlInit()
+            handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+            info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+            name = pynvml.nvmlDeviceGetName(handle)
+            if isinstance(name, bytes):
+                name = name.decode('utf-8')
+            gpu_name = name
+            total_vram_gb = round(info.total / (1024**3), 1)
+            pynvml.nvmlShutdown()
+        except Exception:
+            pass
+
+    return {
+        "gpu_name": gpu_name,
+        "total_vram_gb": total_vram_gb,
+        "total_cpus": total_cpus,
+        "total_ram_gb": total_ram_gb
+    }
+
+
+def prompt_number(prompt_text, min_val, max_val, default_val, is_float=False):
+    """
+    Prompt user for a numeric value within [min_val, max_val].
+    Strictly validates input; re-prompts on out-of-range or invalid values.
+    """
+    while True:
+        try:
+            val_str = input(f"{prompt_text} [Available: {max_val}, Default: {default_val}]: ").strip()
+            if not val_str:
+                return default_val
+            val = float(val_str) if is_float else int(val_str)
+            if min_val <= val <= max_val:
+                return val
+            else:
+                print(f"  ❌ Invalid range! Please enter a value between {min_val} and {max_val}.")
+        except ValueError:
+            print(f"  ❌ Invalid input! Please enter a numeric value between {min_val} and {max_val}.")
+
+
+def load_or_prompt_config():
+    """
+    Load saved host limits or prompt provider via interactive CLI with validation.
+    """
+    hw = get_system_hardware()
+    reconfigure = "--reconfigure" in sys.argv or "-r" in sys.argv
+    non_interactive = "--yes" in sys.argv or "-y" in sys.argv or not sys.stdin.isatty()
+
+    # Load existing config if available and not reconfiguring
+    if os.path.exists(CONFIG_FILE) and not reconfigure:
+        try:
+            with open(CONFIG_FILE, 'r') as f:
+                cfg = json.load(f)
+                print("\n=======================================================")
+                print("  GPU Share Hub — Saved Provider Configuration Loaded")
+                print("=======================================================")
+                print(f"  GPU Hardware : {hw['gpu_name']} (Total: {hw['total_vram_gb']} GB)")
+                print(f"  Shared VRAM  : {cfg.get('shared_vram_gb', hw['total_vram_gb'])} GB")
+                print(f"  Shared CPUs  : {cfg.get('shared_cpus', hw['total_cpus'])} cores")
+                print(f"  Shared RAM   : {cfg.get('shared_ram_gb', hw['total_ram_gb'])} GB")
+                print("  (Tip: Run with python gpu-agent.py --reconfigure to change)")
+                print("=======================================================\n")
+                return cfg
+        except Exception:
+            pass
+
+    # Headless / Background service fallback
+    if non_interactive and not reconfigure:
+        cfg = {
+            "shared_vram_gb": hw["total_vram_gb"],
+            "shared_cpus": max(1, hw["total_cpus"] - 1),
+            "shared_ram_gb": max(2.0, round(hw["total_ram_gb"] * 0.75, 1))
+        }
+        with open(CONFIG_FILE, 'w') as f:
+            json.dump(cfg, f, indent=2)
+        return cfg
+
+    # Interactive CLI Prompting with strict validation
+    print("\n" + "=" * 60)
+    print("      GPU Share Hub — Provider Resource Configuration")
+    print("=" * 60)
+    print("Detected Hardware on your machine:")
+    print(f"  • GPU Model : {hw['gpu_name']}")
+    print(f"  • Total VRAM: {hw['total_vram_gb']} GB")
+    print(f"  • Total CPUs: {hw['total_cpus']} Cores")
+    print(f"  • Total RAM : {hw['total_ram_gb']} GB")
+    print("-" * 60)
+    print("Please choose how much of your resources you want to share.")
+    print("(Press Enter to accept defaults. Renters cannot exceed these caps)\n")
+
+    # 1. VRAM Prompt
+    default_vram = hw["total_vram_gb"]
+    min_vram = 0.5 if default_vram >= 1 else 0.1
+    shared_vram = prompt_number(
+        "→ Max VRAM to share (GB)",
+        min_val=min_vram,
+        max_val=hw["total_vram_gb"],
+        default_val=default_vram,
+        is_float=True
+    )
+
+    # 2. CPU Prompt
+    default_cpu = max(1, hw["total_cpus"] - 2 if hw["total_cpus"] > 2 else hw["total_cpus"])
+    shared_cpus = prompt_number(
+        "→ Max CPU cores to share",
+        min_val=1,
+        max_val=hw["total_cpus"],
+        default_val=default_cpu,
+        is_float=False
+    )
+
+    # 3. System RAM Prompt
+    default_ram = max(1.0, round(hw["total_ram_gb"] * 0.75, 1))
+    shared_ram = prompt_number(
+        "→ Max System RAM to share (GB)",
+        min_val=1.0,
+        max_val=hw["total_ram_gb"],
+        default_val=default_ram,
+        is_float=True
+    )
+
+    cfg = {
+        "shared_vram_gb": shared_vram,
+        "shared_cpus": shared_cpus,
+        "shared_ram_gb": shared_ram
+    }
+
+    with open(CONFIG_FILE, 'w') as f:
+        json.dump(cfg, f, indent=2)
+
+    print("\n" + "=" * 60)
+    print("✅ Configuration saved to host_config.json!")
+    print(f"   Sharing Caps: {shared_vram} GB VRAM | {shared_cpus} CPUs | {shared_ram} GB RAM")
+    print("=" * 60 + "\n")
+    return cfg
+
+
+# Initialize Provider Configuration
+PROVIDER_CONFIG = load_or_prompt_config()
 
 
 # ---------------------------------------------------------------
@@ -84,14 +273,20 @@ def get_tailscale_ip():
 
 
 def get_gpu_stats():
-    """Return VRAM and CPU stats. Falls back to safe defaults if no GPU."""
+    """
+    Return VRAM and CPU stats capped to the provider's configured limits.
+    """
+    max_shared_vram_mb = PROVIDER_CONFIG.get("shared_vram_gb", 8.0) * 1024
+    max_shared_cpus = PROVIDER_CONFIG.get("shared_cpus", os.cpu_count() or 4)
+
     if not GPU_AVAILABLE:
         return {
-            "vram_total_mb": 8192,
-            "vram_free_mb": 8192,
-            "cpus": os.cpu_count() or 4,
+            "vram_total_mb": max_shared_vram_mb,
+            "vram_free_mb": max_shared_vram_mb,
+            "cpus": max_shared_cpus,
             "gpu_util_pct": 0,
         }
+
     pynvml.nvmlInit()
     try:
         handle = pynvml.nvmlDeviceGetHandleByIndex(0)
@@ -101,10 +296,15 @@ def get_gpu_stats():
             gpu_util = util.gpu
         except Exception:
             gpu_util = 0
+
+        actual_free_mb = info.free / 1024**2
+        # Cap advertised VRAM to provider's limit
+        capped_free_mb = min(actual_free_mb, max_shared_vram_mb)
+
         return {
-            "vram_total_mb": info.total / 1024**2,
-            "vram_free_mb": info.free / 1024**2,
-            "cpus": os.cpu_count() or 4,
+            "vram_total_mb": max_shared_vram_mb,
+            "vram_free_mb": capped_free_mb,
+            "cpus": max_shared_cpus,
             "gpu_util_pct": gpu_util,
         }
     finally:
@@ -162,9 +362,14 @@ def send_heartbeat():
             for job in dispatched:
                 j_id = str(job.get("job_id"))
                 t_token = job.get("token")
-                cpu_cores = job.get("cpu_cores", 2)
-                ram_gb = job.get("ram_gb", 8)
-                print(f"[Agent] Received new job #{j_id}! (CPU:{cpu_cores} cores, RAM:{ram_gb}GB) Starting Jupyter...")
+                req_cpu = job.get("cpu_cores", 2)
+                req_ram = job.get("ram_gb", 8)
+
+                # Clamp to provider max limits
+                cpu_cores = min(req_cpu, PROVIDER_CONFIG.get("shared_cpus", 4))
+                ram_gb = min(req_ram, int(PROVIDER_CONFIG.get("shared_ram_gb", 8.0)))
+
+                print(f"[Agent] Received new job #{j_id}! (Allocated: {cpu_cores} CPUs, {ram_gb}GB RAM) Starting Jupyter...")
                 threading.Thread(
                     target=_launch_jupyter_bg,
                     args=(j_id, t_token, tailscale_ip, cpu_cores, ram_gb),
@@ -173,7 +378,7 @@ def send_heartbeat():
 
             vram_free = stats['vram_free_mb']
             gpu_util = stats.get('gpu_util_pct', 0)
-            print(f"[{time.strftime('%X')}] Heartbeat 200 | VRAM free: {vram_free:.0f}MB | GPU util: {gpu_util}% | IP: {tailscale_ip}")
+            print(f"[{time.strftime('%X')}] Heartbeat 200 | Capped Free VRAM: {vram_free:.0f}MB | GPU util: {gpu_util}% | IP: {tailscale_ip}")
         else:
             print(f"[{time.strftime('%X')}] Heartbeat {resp.status_code}")
     except Exception as e:
@@ -182,9 +387,8 @@ def send_heartbeat():
 
 def heartbeat_loop():
     """Background thread: send heartbeats every 3 seconds to quickly pick up jobs."""
-    print(f"[Agent] Starting. Machine ID: {MACHINE_ID}")
-    print(f"[Agent] Docker image: {DOCKER_IMAGE}")
-    print(f"[Agent] Backend: {BACKEND_URL}")
+    print(f"[Agent] Active Machine ID: {MACHINE_ID}")
+    print(f"[Agent] Backend Target: {BACKEND_URL}")
     while True:
         send_heartbeat()
         time.sleep(3)
@@ -200,7 +404,6 @@ if FLASK_AVAILABLE:
         """
         Start a Cloudflare quick tunnel (no account needed).
         For localhost testing, skip the tunnel and return localhost URL directly.
-        Source: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/do-more-with-tunnels/trycloudflare/
         """
         import platform, re, queue, threading as _th
 
@@ -285,11 +488,11 @@ if FLASK_AVAILABLE:
         try:
             client = docker.from_env()
 
-            # --- Dynamic port allocation: find a free port for this job ---
+            # Dynamic port allocation: find a free port for this job
             host_port = find_free_port()
             container_name = f"jupyter-{token[:8]}"
 
-            # Cleanup: remove any existing container with same name (re-rent scenario)
+            # Cleanup: remove any existing container with same name
             for c in client.containers.list(all=True):
                 if c.name == container_name:
                     print(f"[Agent] Removing existing container: {c.name}")
@@ -299,33 +502,28 @@ if FLASK_AVAILABLE:
                     except Exception:
                         pass
 
-            # --- GPU passthrough ---
+            # GPU passthrough
             device_requests = []
             if GPU_AVAILABLE:
                 device_requests = [docker.types.DeviceRequest(count=-1, capabilities=[['gpu']])]
 
-            # --- Resource caps via Docker cgroups ---
-            # cpu_quota = cpu_cores * cpu_period (e.g. 2 cores = 200000 / 100000)
+            # Hard resource caps via Docker cgroups
             cpu_period = 100000
             cpu_quota = cpu_cores * cpu_period
             mem_limit = f"{ram_gb}g"
 
-            print(f"[Agent] [{job_id}] Starting container on port {host_port} "
-                  f"(CPU: {cpu_cores} cores, RAM: {ram_gb}GB, GPU: {'Yes' if GPU_AVAILABLE else 'No'})...")
+            print(f"[Agent] [{job_id}] Launching container on port {host_port} "
+                  f"(Capped at: {cpu_cores} CPUs, {ram_gb}GB RAM, GPU: {'Yes' if GPU_AVAILABLE else 'No'})...")
 
             container = client.containers.run(
                 DOCKER_IMAGE,
                 detach=True,
-                # Port: map host_port -> container's 8888 (unique per job)
                 ports={"8888/tcp": host_port},
-                # Resource caps enforced by Docker cgroups at kernel level
                 cpu_period=cpu_period,
                 cpu_quota=cpu_quota,
                 mem_limit=mem_limit,
-                memswap_limit=mem_limit,  # Disable swap
-                # GPU access
+                memswap_limit=mem_limit,
                 device_requests=device_requests,
-                # Environment
                 environment={
                     "JUPYTER_TOKEN": token,
                     "GRANT_SUDO": "yes",
@@ -344,10 +542,10 @@ if FLASK_AVAILABLE:
             )
             print(f"[Agent] [{job_id}] Container up: {container.short_id} on port {host_port}")
 
-            # Give Jupyter a moment to bind to port
+            # Give Jupyter a moment to bind
             time.sleep(5)
 
-            # Start Cloudflare quick tunnel to the dynamic port
+            # Start Cloudflare quick tunnel to dynamic port
             tunnel_url = start_cloudflare_tunnel(host_port, machine_ip=machine_ip)
             public_url = f"{tunnel_url}?token={token}"
 
@@ -380,16 +578,15 @@ if FLASK_AVAILABLE:
 
     @flask_app.route("/run-jupyter", methods=["POST"])
     def run_jupyter():
-        """
-        Accepts a token + resource spec, starts Docker + Cloudflare tunnel in background.
-        Returns job_id immediately — caller polls /job-status/<job_id>.
-        """
         data = flask_request.get_json()
         token = data.get("token", uuid.uuid4().hex)
         machine_ip = data.get("machine_ip", "127.0.0.1")
-        cpu_cores = data.get("cpu_cores", 2)
-        ram_gb = data.get("ram_gb", 8)
+        req_cpu = data.get("cpu_cores", 2)
+        req_ram = data.get("ram_gb", 8)
         job_id = uuid.uuid4().hex[:12]
+
+        cpu_cores = min(req_cpu, PROVIDER_CONFIG.get("shared_cpus", 4))
+        ram_gb = min(req_ram, int(PROVIDER_CONFIG.get("shared_ram_gb", 8.0)))
 
         job_store[job_id] = {"status": "pending"}
         t = threading.Thread(
@@ -404,7 +601,6 @@ if FLASK_AVAILABLE:
 
     @flask_app.route("/job-status/<job_id>", methods=["GET"])
     def job_status(job_id):
-        """Poll this endpoint until status == 'done' or 'error'."""
         job = job_store.get(job_id)
         if not job:
             return jsonify({"status": "not_found"}), 404
@@ -412,7 +608,6 @@ if FLASK_AVAILABLE:
 
     @flask_app.route("/health", methods=["GET"])
     def health():
-        """Health check — also returns active container list."""
         try:
             client = docker.from_env()
             active = [c.name for c in client.containers.list() if c.name.startswith("jupyter-")]
@@ -421,16 +616,13 @@ if FLASK_AVAILABLE:
         return jsonify({
             "status": "ok",
             "machine_id": MACHINE_ID,
+            "provider_config": PROVIDER_CONFIG,
             "active_containers": active,
             "active_jobs": len(active),
         }), 200
 
     @flask_app.route("/shutdown", methods=["POST"])
     def shutdown():
-        """
-        Graceful shutdown: stop all running Jupyter containers, then exit agent.
-        Provider can call this or use Ctrl+C to stop sharing.
-        """
         print("[Agent] Shutdown requested. Stopping all Jupyter containers...")
         try:
             client = docker.from_env()
@@ -454,7 +646,7 @@ if FLASK_AVAILABLE:
 
 
 if __name__ == "__main__":
-    # Pre-fetch Docker image in background (so first renter is fast)
+    # Pre-fetch Docker image in background
     threading.Thread(target=prefetch_image, daemon=True).start()
 
     # Start heartbeat in background thread
