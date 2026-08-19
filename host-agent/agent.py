@@ -456,7 +456,7 @@ if FLASK_AVAILABLE:
             print("[Agent] cloudflared downloaded.")
 
         proc = subprocess.Popen(
-            [cf_binary, "tunnel", "--url", f"http://localhost:{port}"],
+            [cf_binary, "tunnel", "--url", f"http://127.0.0.1:{port}"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -504,7 +504,8 @@ if FLASK_AVAILABLE:
         1. Find a free port (supports multiple instances on same machine)
         2. Apply Docker cgroup resource caps (CPU + RAM)
         3. Start container with GPU passthrough
-        4. Create Cloudflare tunnel for public access
+        4. Wait for Jupyter HTTP server to be fully ready
+        5. Create Cloudflare tunnel for public access
         """
         try:
             client = docker.from_env()
@@ -563,8 +564,22 @@ if FLASK_AVAILABLE:
             )
             print(f"[Agent] [{job_id}] Container up: {container.short_id} on port {host_port}")
 
-            # Give Jupyter a moment to bind
-            time.sleep(5)
+            # Actively poll until Jupyter is ready and responding
+            print(f"[Agent] [{job_id}] Waiting for Jupyter to be ready on 127.0.0.1:{host_port}...")
+            is_ready = False
+            for attempt in range(25):
+                try:
+                    r = requests.get(f"http://127.0.0.1:{host_port}/", timeout=1)
+                    if r.status_code in [200, 302, 403]:
+                        is_ready = True
+                        print(f"[Agent] [{job_id}] Jupyter is alive and responding (HTTP {r.status_code})!")
+                        break
+                except Exception:
+                    pass
+                time.sleep(1)
+
+            if not is_ready:
+                print(f"[Agent] [{job_id}] Warning: Jupyter readiness check timed out, proceeding with tunnel...")
 
             # Start Cloudflare quick tunnel to dynamic port
             tunnel_url = start_cloudflare_tunnel(host_port, machine_ip=machine_ip)
