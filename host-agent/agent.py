@@ -502,10 +502,16 @@ if FLASK_AVAILABLE:
     job_store: dict = {}
 
     def _get_target_image(client):
-        """Pick an image already cached locally to avoid downloading GBs."""
+        """
+        Pick the best available image on this machine.
+        Priority: our pre-baked GPU image > tensorflow > scipy > base
+        All have Jupyter; only our custom one has torch pre-installed.
+        """
         preferred_order = [
-            "jupyter/tensorflow-notebook",
-            "jupyter/scipy-notebook:latest",
+            "gpushare/gpu-jupyter:latest",      # Our custom pre-baked image
+            "gpu-jupyter:latest",               # Locally built variant
+            "jupyter/tensorflow-notebook",      # Has many ML libs
+            "jupyter/scipy-notebook:latest",    # Fallback
             "jupyter/scipy-notebook",
             DOCKER_IMAGE,
             "jupyter/base-notebook"
@@ -513,9 +519,11 @@ if FLASK_AVAILABLE:
         for img in preferred_order:
             try:
                 client.images.get(img)
+                print(f"[Agent] Using image: {img}")
                 return img
             except Exception:
                 pass
+        print(f"[Agent] No cached image found, will pull: {DOCKER_IMAGE}")
         return DOCKER_IMAGE
 
     def _launch_jupyter_bg(
