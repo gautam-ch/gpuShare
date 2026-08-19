@@ -9,9 +9,10 @@ export default function Home() {
         <h1 className="text-2xl font-bold bg-gradient-to-r from-emerald-400 to-cyan-400 bg-clip-text text-transparent">
           GPU Share Hub
         </h1>
-        <nav className="flex gap-6">
+        <nav className="flex items-center gap-6">
           <Link href="/jupyter" className="text-sm hover:text-emerald-400 transition-colors">Jupyter Workspace</Link>
           <Link href="/host" className="text-sm hover:text-cyan-400 transition-colors">Host GPU</Link>
+          <Link href="/admin" className="text-sm px-3 py-1 bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 hover:bg-indigo-500/20 rounded-lg transition-colors">Admin</Link>
         </nav>
       </header>
       <RentForm />

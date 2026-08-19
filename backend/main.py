@@ -125,7 +125,7 @@ class StartJupyterRequest(BaseModel):
 
 @app.post("/rent")
 async def rent_gpu(req: RentRequest, db: Session = Depends(get_db)):
-    """Match a machine by VRAM, create a job, return a one-time token and Jupyter URL."""
+    """Match a machine by VRAM and CPU cores, create a job, return a one-time token and Jupyter URL."""
     vram_mb = req.vram_required * 1024  # convert GB to MB
     # Ensure machine sent a heartbeat within the last 60 seconds
     cutoff = datetime.datetime.utcnow() - datetime.timedelta(seconds=60)
@@ -133,7 +133,7 @@ async def rent_gpu(req: RentRequest, db: Session = Depends(get_db)):
         models.Machine.status == "online",
         models.Machine.last_heartbeat >= cutoff,
         models.Machine.vram_free_mb >= vram_mb,
-        models.Machine.cpus >= req.cpus_required
+        models.Machine.cpus >= req.cpu_cores
     ).first()
 
     if not machine:
@@ -145,7 +145,7 @@ async def rent_gpu(req: RentRequest, db: Session = Depends(get_db)):
     new_job = models.Job(
         machine_id=machine.id,
         vram_required=vram_mb,
-        cpus_required=req.cpus_required,
+        cpus_required=req.cpu_cores,
         cpu_cores=req.cpu_cores,
         ram_gb=req.ram_gb,
         status="pending",
