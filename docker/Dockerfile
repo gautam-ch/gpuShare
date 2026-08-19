@@ -10,7 +10,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
-# 1. System packages + Tini init process + Sudo
+# 1. System packages + Tini init process + Audio/Video codecs (FFmpeg) + Sudo
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
@@ -18,11 +18,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
     ca-certificates \
+    ffmpeg \
     tini \
     sudo \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. Upgrade pip & Install Jupyter + PyTorch CUDA 12.1 + Core ML Ecosystem
+# 2. Upgrade pip & Install Jupyter + PyTorch CUDA 12.1 + Full AI/ML Ecosystem
 RUN pip3 install --no-cache-dir --upgrade pip setuptools wheel && \
     pip3 install --no-cache-dir \
         notebook \
@@ -40,6 +41,9 @@ RUN pip3 install --no-cache-dir --upgrade pip setuptools wheel && \
         tqdm \
         transformers \
         accelerate \
+        datasets \
+        huggingface_hub \
+        einops \
     && pip cache purge
 
 # 3. Create 'jovyan' user with passwordless sudo for user convenience
