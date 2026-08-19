@@ -1,5 +1,5 @@
 "use client"
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000'
 
@@ -13,6 +13,15 @@ interface Preset {
   ram: number
   desc: string
   workloads: string[]
+}
+
+interface Machine {
+  id: string
+  tailscale_ip: string
+  vram_total_mb: number
+  vram_free_mb: number
+  cpus: number
+  status: string
 }
 
 const PRESETS: Preset[] = [
@@ -58,10 +67,46 @@ export default function RentForm() {
   const [ramGb, setRamGb] = useState<number>(8)
   const [showGuide, setShowGuide] = useState<boolean>(false)
 
+  const [onlineMachines, setOnlineMachines] = useState<Machine[]>([])
+  const [maxAvailableVram, setMaxAvailableVram] = useState<number | null>(null)
+  const [maxAvailableCpus, setMaxAvailableCpus] = useState<number | null>(null)
+
   const [message, setMessage] = useState('')
   const [token, setToken] = useState('')
   const [jupyterUrl, setJupyterUrl] = useState('')
   const [loading, setLoading] = useState(false)
+
+  // Fetch online capacity
+  useEffect(() => {
+    const checkCapacity = async () => {
+      try {
+        const res = await fetch(`${BACKEND_URL}/machines`)
+        if (res.ok) {
+          const data: Machine[] = await res.json()
+          const live = data.filter(m => m.status === 'online')
+          setOnlineMachines(live)
+          if (live.length > 0) {
+            const maxV = Math.max(...live.map(m => (m.vram_free_mb || 0) / 1024))
+            const maxC = Math.max(...live.map(m => m.cpus || 0))
+            const roundedMaxV = Math.floor(maxV * 10) / 10
+            setMaxAvailableVram(roundedMaxV)
+            setMaxAvailableCpus(maxC)
+
+            // Auto-adjust initial preset if 4GB is greater than max available
+            if (roundedMaxV < 4 && roundedMaxV > 0) {
+              setVram(roundedMaxV >= 2 ? 2 : roundedMaxV)
+              setSelectedPreset('starter')
+            }
+          }
+        }
+      } catch (e) {
+        console.error('Failed to fetch machines:', e)
+      }
+    }
+    checkCapacity()
+    const interval = setInterval(checkCapacity, 10000)
+    return () => clearInterval(interval)
+  }, [])
 
   const applyPreset = (preset: Preset) => {
     setSelectedPreset(preset.id)
@@ -111,12 +156,20 @@ export default function RentForm() {
     window.location.href = `/jupyter?token=${token}`
   }
 
+  const isOverVram = maxAvailableVram !== null && vram > maxAvailableVram
+  const isOverCpu = maxAvailableCpus !== null && cpuCores > maxAvailableCpus
+
   return (
     <section className="max-w-4xl mx-auto space-y-8 pb-16">
       {/* Hero Header */}
       <div className="text-center space-y-3">
-        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold uppercase tracking-wider">
-          <span>⚡ Instant Tailnet Provisioning</span>
+        <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold uppercase tracking-wider">
+          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+          {onlineMachines.length > 0 ? (
+            <span>{onlineMachines.length} Host Machine{onlineMachines.length > 1 ? 's' : ''} Online • Max {maxAvailableVram} GB VRAM Available</span>
+          ) : (
+            <span>Instant Tailnet GPU Marketplace</span>
+          )}
         </div>
         <h2 className="text-4xl md:text-5xl font-extrabold tracking-tight">
           Rent On-Demand <span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 via-cyan-400 to-indigo-400">GPU Compute</span>
@@ -126,7 +179,7 @@ export default function RentForm() {
         </p>
       </div>
 
-      {/* Preset Cards (Production pattern used by RunPod & Lambda Labs) */}
+      {/* Preset Cards */}
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <label className="text-sm font-semibold text-slate-300 uppercase tracking-wide">
@@ -144,6 +197,7 @@ export default function RentForm() {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {PRESETS.map(preset => {
             const isSelected = selectedPreset === preset.id
+            const exceeds = maxAvailableVram !== null && preset.vram > maxAvailableVram
             return (
               <button
                 key={preset.id}
@@ -163,12 +217,21 @@ export default function RentForm() {
                   </div>
                 )}
                 <div>
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="text-2xl">{preset.icon}</span>
-                    <span className="font-bold text-slate-100 text-sm">{preset.name}</span>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-2xl">{preset.icon}</span>
+                      <span className="font-bold text-slate-100 text-sm">{preset.name}</span>
+                    </div>
                   </div>
-                  <div className="inline-block px-2 py-0.5 bg-slate-800 border border-white/10 rounded text-[11px] font-medium text-emerald-300 mb-3">
-                    {preset.badge}
+                  <div className="flex items-center gap-2 mb-3">
+                    <span className="px-2 py-0.5 bg-slate-800 border border-white/10 rounded text-[11px] font-medium text-emerald-300">
+                      {preset.badge}
+                    </span>
+                    {exceeds && (
+                      <span className="px-2 py-0.5 bg-amber-500/10 border border-amber-500/30 rounded text-[10px] font-medium text-amber-300">
+                        Exceeds Live VRAM
+                      </span>
+                    )}
                   </div>
                   <p className="text-xs text-slate-400 leading-relaxed mb-4">
                     {preset.desc}
@@ -185,7 +248,7 @@ export default function RentForm() {
         </div>
       </div>
 
-      {/* Guide Accordion (Educational Breakdown) */}
+      {/* Guide Accordion */}
       {showGuide && (
         <div className="bg-slate-900/90 border border-cyan-500/30 rounded-xl p-5 text-sm space-y-4 animate-in fade-in duration-200">
           <div className="flex items-center gap-2 text-cyan-400 font-bold text-base">
@@ -265,20 +328,28 @@ export default function RentForm() {
             </div>
           </div>
           <div className="grid grid-cols-6 gap-2">
-            {[1, 2, 4, 6, 8, 12].map(v => (
-              <button
-                key={v}
-                type="button"
-                onClick={() => handleCustomChange('vram', v)}
-                className={`py-2 text-xs font-mono font-bold rounded-lg border transition ${
-                  vram === v
-                    ? 'bg-emerald-500 text-slate-950 border-emerald-400 shadow-md shadow-emerald-900/30'
-                    : 'bg-slate-800/80 border-white/10 text-slate-300 hover:bg-slate-700 hover:border-white/20'
-                }`}
-              >
-                {v} GB
-              </button>
-            ))}
+            {[1, 2, 4, 6, 8, 12].map(v => {
+              const disabled = maxAvailableVram !== null && v > maxAvailableVram
+              return (
+                <button
+                  key={v}
+                  type="button"
+                  onClick={() => handleCustomChange('vram', v)}
+                  className={`py-2 text-xs font-mono font-bold rounded-lg border transition relative ${
+                    vram === v
+                      ? 'bg-emerald-500 text-slate-950 border-emerald-400 shadow-md shadow-emerald-900/30'
+                      : disabled
+                      ? 'bg-slate-900/40 border-white/5 text-slate-600 hover:text-slate-400'
+                      : 'bg-slate-800/80 border-white/10 text-slate-300 hover:bg-slate-700 hover:border-white/20'
+                  }`}
+                >
+                  {v} GB
+                  {disabled && (
+                    <span className="block text-[9px] font-sans text-slate-500 font-normal">Offline</span>
+                  )}
+                </button>
+              )
+            })}
           </div>
         </div>
 
@@ -296,20 +367,25 @@ export default function RentForm() {
             </div>
           </div>
           <div className="grid grid-cols-5 gap-2">
-            {[1, 2, 4, 6, 8].map(c => (
-              <button
-                key={c}
-                type="button"
-                onClick={() => handleCustomChange('cpu', c)}
-                className={`py-2 text-xs font-mono font-bold rounded-lg border transition ${
-                  cpuCores === c
-                    ? 'bg-cyan-500 text-slate-950 border-cyan-400 shadow-md shadow-cyan-900/30'
-                    : 'bg-slate-800/80 border-white/10 text-slate-300 hover:bg-slate-700 hover:border-white/20'
-                }`}
-              >
-                {c} {c === 1 ? 'Core' : 'Cores'}
-              </button>
-            ))}
+            {[1, 2, 4, 6, 8].map(c => {
+              const disabled = maxAvailableCpus !== null && c > maxAvailableCpus
+              return (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => handleCustomChange('cpu', c)}
+                  className={`py-2 text-xs font-mono font-bold rounded-lg border transition ${
+                    cpuCores === c
+                      ? 'bg-cyan-500 text-slate-950 border-cyan-400 shadow-md shadow-cyan-900/30'
+                      : disabled
+                      ? 'bg-slate-900/40 border-white/5 text-slate-600 hover:text-slate-400'
+                      : 'bg-slate-800/80 border-white/10 text-slate-300 hover:bg-slate-700 hover:border-white/20'
+                  }`}
+                >
+                  {c} {c === 1 ? 'Core' : 'Cores'}
+                </button>
+              )
+            })}
           </div>
         </div>
 
@@ -343,6 +419,28 @@ export default function RentForm() {
             ))}
           </div>
         </div>
+
+        {/* Capacity Warning If Selected > Available */}
+        {(isOverVram || isOverCpu) && (
+          <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-4 flex flex-col md:flex-row items-center justify-between gap-3 text-xs text-amber-200">
+            <div>
+              <strong className="font-semibold text-amber-300">⚠️ Allocation Exceeds Live Host Capacity:</strong>
+              <p className="text-slate-300 mt-0.5">
+                Online machines currently offer max {maxAvailableVram} GB VRAM & {maxAvailableCpus} CPUs.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                if (maxAvailableVram) setVram(maxAvailableVram)
+                if (maxAvailableCpus) setCpuCores(Math.min(cpuCores, maxAvailableCpus))
+              }}
+              className="px-3 py-1.5 bg-amber-500 text-slate-950 font-bold rounded-lg hover:bg-amber-400 transition shrink-0"
+            >
+              Auto-Adjust to {maxAvailableVram} GB
+            </button>
+          </div>
+        )}
 
         {/* Spec Summary & Rent CTA */}
         <div className="pt-6 border-t border-white/10 space-y-4">

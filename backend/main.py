@@ -127,17 +127,45 @@ class StartJupyterRequest(BaseModel):
 async def rent_gpu(req: RentRequest, db: Session = Depends(get_db)):
     """Match a machine by VRAM and CPU cores, create a job, return a one-time token and Jupyter URL."""
     vram_mb = req.vram_required * 1024  # convert GB to MB
-    # Ensure machine sent a heartbeat within the last 60 seconds
-    cutoff = datetime.datetime.utcnow() - datetime.timedelta(seconds=60)
+    # Practical VRAM tolerance: Windows display uses ~300MB VRAM, so a 4GB card has ~3780MB free
+    vram_match_threshold = max(vram_mb - 512, vram_mb * 0.85)
+
+    # Allow 120s heartbeat window for stability
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(seconds=120)
+    online_machines = db.query(models.Machine).filter(
+        models.Machine.status == "online",
+        models.Machine.last_heartbeat >= cutoff
+    ).all()
+
+    if not online_machines:
+        raise HTTPException(
+            status_code=404,
+            detail="No GPU provider machines are currently online. Please ensure your host agent is running."
+        )
+
+    max_vram_avail = max((m.vram_total_mb or m.vram_free_mb or 0) for m in online_machines) / 1024
+    max_cpus_avail = max((m.cpus or 4) for m in online_machines)
+
+    # Find best matching machine
     machine = db.query(models.Machine).filter(
         models.Machine.status == "online",
         models.Machine.last_heartbeat >= cutoff,
-        models.Machine.vram_free_mb >= vram_mb,
-        models.Machine.cpus >= req.cpu_cores
+        models.Machine.vram_free_mb >= vram_match_threshold,
     ).first()
 
+    # If strict free VRAM wasn't enough (e.g. from previous tests), match by total VRAM
     if not machine:
-        raise HTTPException(status_code=404, detail="No machines available with requested resources")
+        machine = db.query(models.Machine).filter(
+            models.Machine.status == "online",
+            models.Machine.last_heartbeat >= cutoff,
+            models.Machine.vram_total_mb >= vram_match_threshold,
+        ).first()
+
+    if not machine:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Requested {req.vram_required:.1f} GB VRAM & {req.cpu_cores} CPUs, but online machines have max {max_vram_avail:.1f} GB VRAM & {max_cpus_avail} CPUs. Try selecting {max_vram_avail:.1f} GB or less."
+        )
 
     access_token = uuid.uuid4().hex
 
@@ -152,7 +180,8 @@ async def rent_gpu(req: RentRequest, db: Session = Depends(get_db)):
         token=access_token
     )
     db.add(new_job)
-    machine.vram_free_mb -= vram_mb
+    if machine.vram_free_mb:
+        machine.vram_free_mb = max(0.0, machine.vram_free_mb - vram_mb)
     db.commit()
     db.refresh(new_job)
 
