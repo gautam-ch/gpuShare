@@ -389,63 +389,122 @@ async def install_script_windows():
 # =====================================================
 
 Write-Host ""
-Write-Host "========================================"  -ForegroundColor Cyan
-Write-Host "  GPU Share Hub - Host Setup (Windows)"  -ForegroundColor Cyan
-Write-Host "========================================"  -ForegroundColor Cyan
+Write-Host "======================================================" -ForegroundColor Cyan
+Write-Host "   GPU Share Hub - Automatic Host Setup (Windows)     " -ForegroundColor Cyan
+Write-Host "======================================================" -ForegroundColor Cyan
 Write-Host ""
 
-# --- STEP 1: Install Tailscale ---
-Write-Host "[1/4] Checking Tailscale..." -ForegroundColor Yellow
+# --- STEP 1: Tailscale ---
+Write-Host "[1/6] Checking Tailscale..." -ForegroundColor Yellow
 $tsExe = "C:\\Program Files\\Tailscale\\tailscale.exe"
 if (-not (Get-Command tailscale -ErrorAction SilentlyContinue) -and -not (Test-Path $tsExe)) {{
     Write-Host "    Installing Tailscale via winget..."
     winget install tailscale.tailscale -e --silent --accept-source-agreements --accept-package-agreements
-    Write-Host "    Tailscale installed. Waiting for it to be ready..." -ForegroundColor Green
     Start-Sleep -Seconds 10
 }} else {{
     Write-Host "    Tailscale already installed." -ForegroundColor Green
 }}
 
-# Resolve path — tailscale may not be in PATH until next shell session
 if (Get-Command tailscale -ErrorAction SilentlyContinue) {{
     $TS_PATH = "tailscale"
 }} elseif (Test-Path $tsExe) {{
     $TS_PATH = $tsExe
 }} else {{
-    Write-Host "    ERROR: Tailscale not found. Install it from https://tailscale.com/download and re-run." -ForegroundColor Red
-    exit 1
+    Write-Host "    ERROR: Tailscale not found." -ForegroundColor Red; exit 1
 }}
-
-Write-Host "[1/4] Connecting to Tailnet (automatic)..." -ForegroundColor Yellow
 & $TS_PATH up --auth-key={auth_key} --accept-routes
 $TailscaleIP = (& $TS_PATH ip -4 2>$null)
 Write-Host "    Connected! Tailscale IP: $TailscaleIP" -ForegroundColor Green
 
-# --- STEP 2: Python dependencies ---
-Write-Host "[2/4] Installing Python dependencies..." -ForegroundColor Yellow
+# --- STEP 2: Enable WSL2 backend in Docker Desktop (GPU passthrough) ---
+Write-Host ""
+Write-Host "[2/6] Configuring Docker Desktop for GPU passthrough..." -ForegroundColor Yellow
+$dockerSettings = "$env:APPDATA\\Docker\\settings.json"
+if (Test-Path $dockerSettings) {{
+    $settings = Get-Content $dockerSettings -Raw | ConvertFrom-Json
+    $changed = $false
+
+    if ($settings.wslEngineEnabled -ne $true) {{
+        Write-Host "    Enabling WSL2 engine (required for GPU passthrough)..."
+        $settings.wslEngineEnabled = $true
+        $changed = $true
+    }}
+    if ($settings.PSObject.Properties['useVirtualizationFrameworkVirtioGPU'] -ne $null) {{
+        $settings.useVirtualizationFrameworkVirtioGPU = $false
+    }}
+
+    if ($changed) {{
+        $settings | ConvertTo-Json -Depth 20 | Set-Content $dockerSettings
+        Write-Host "    WSL2 engine enabled. Restarting Docker Desktop..." -ForegroundColor Yellow
+        Stop-Process -Name "Docker Desktop" -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 5
+        Start-Process "$env:ProgramFiles\\Docker\\Docker\\Docker Desktop.exe"
+        Write-Host "    Waiting 25s for Docker to be ready..." -ForegroundColor Gray
+        Start-Sleep -Seconds 25
+    }} else {{
+        Write-Host "    Docker Desktop WSL2 already configured." -ForegroundColor Green
+    }}
+}} else {{
+    Write-Host "    Docker Desktop settings not found. Is Docker Desktop installed?" -ForegroundColor Yellow
+}}
+
+# --- STEP 3: Verify GPU passthrough ---
+Write-Host ""
+Write-Host "[3/6] Verifying GPU passthrough in Docker..." -ForegroundColor Yellow
+$nvTest = docker run --rm --gpus all nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi 2>&1
+if ($LASTEXITCODE -eq 0) {{
+    Write-Host "    GPU passthrough VERIFIED!" -ForegroundColor Green
+    $nvTest | Select-String "GeForce|Quadro|Tesla|RTX|GTX" | ForEach-Object {{ Write-Host "    $_" -ForegroundColor Cyan }}
+}} else {{
+    Write-Host "    WARNING: GPU not visible in Docker. Sessions will run on CPU only." -ForegroundColor Yellow
+    Write-Host "    To fix: Open Docker Desktop -> Settings -> General -> Enable WSL2 engine" -ForegroundColor Gray
+}}
+
+# --- STEP 4: Build GPU-ready Jupyter image (once, ~10 min) ---
+Write-Host ""
+Write-Host "[4/6] Building GPU-ready Jupyter image (only runs once)..." -ForegroundColor Yellow
+$imgCheck = docker images -q gpu-jupyter:latest 2>$null
+if ($imgCheck) {{
+    Write-Host "    gpu-jupyter:latest already built. Skipping." -ForegroundColor Green
+}} else {{
+    Write-Host "    Downloading Dockerfile..."
+    $dockerfilePath = "$env:USERPROFILE\\gpu-jupyter.Dockerfile"
+    Invoke-WebRequest -Uri "{BACKEND_PUBLIC_URL}/static/Dockerfile" -OutFile $dockerfilePath
+    Write-Host "    Building image (this takes ~10 minutes, happens only once)..."
+    docker build -t gpu-jupyter:latest -f $dockerfilePath "$env:USERPROFILE"
+    if ($LASTEXITCODE -eq 0) {{
+        Write-Host "    gpu-jupyter:latest built successfully!" -ForegroundColor Green
+    }} else {{
+        Write-Host "    Image build failed. Will use fallback scipy-notebook." -ForegroundColor Yellow
+    }}
+}}
+
+# --- STEP 5: Python dependencies ---
+Write-Host ""
+Write-Host "[5/6] Installing Python dependencies..." -ForegroundColor Yellow
 pip install pynvml requests flask docker --quiet
 Write-Host "    Done." -ForegroundColor Green
 
-# --- STEP 3: Download agent ---
-Write-Host "[3/4] Downloading agent..." -ForegroundColor Yellow
-Invoke-WebRequest -Uri "{BACKEND_PUBLIC_URL}/static/agent.py" -OutFile "$env:USERPROFILE\\gpu-agent.py"
-if (Test-Path "$env:USERPROFILE\\gpu-agent.py") {{
-    Write-Host "    Agent saved to $env:USERPROFILE\\gpu-agent.py" -ForegroundColor Green
-}} else {{
-    Write-Host "    ERROR: Failed to download agent. Check backend URL." -ForegroundColor Red
-    exit 1
-}}
-
-# --- STEP 4: Start ---
-Write-Host "[4/4] Starting agent..." -ForegroundColor Yellow
+# --- STEP 6: Download and run agent ---
 Write-Host ""
-Write-Host "Setup complete! Your machine will now appear on the platform." -ForegroundColor Green
-Write-Host "   Keep this window open. Press Ctrl+C to stop." -ForegroundColor Gray
+Write-Host "[6/6] Downloading GPU Share Hub agent..." -ForegroundColor Yellow
+Invoke-WebRequest -Uri "{BACKEND_PUBLIC_URL}/static/agent.py" -OutFile "$env:USERPROFILE\\gpu-agent.py"
+if (-not (Test-Path "$env:USERPROFILE\\gpu-agent.py")) {{
+    Write-Host "    ERROR: Failed to download agent." -ForegroundColor Red; exit 1
+}}
+Write-Host "    Agent saved to $env:USERPROFILE\\gpu-agent.py" -ForegroundColor Green
+
+Write-Host ""
+Write-Host "======================================================" -ForegroundColor Green
+Write-Host "   Setup complete! Configuring your sharing limits..." -ForegroundColor Green
+Write-Host "   Keep this window open. Press Ctrl+C to stop."       -ForegroundColor Gray
+Write-Host "======================================================" -ForegroundColor Green
 Write-Host ""
 $env:BACKEND_URL = "{BACKEND_PUBLIC_URL}/heartbeat"
 python "$env:USERPROFILE\\gpu-agent.py"
 """
     return script
+
 
 
 @app.get("/static/agent.py", response_class=PlainTextResponse)
@@ -455,6 +514,15 @@ async def serve_agent():
     if not agent_path.exists():
         raise HTTPException(status_code=404, detail="agent.py not found on server")
     return agent_path.read_text()
+
+
+@app.get("/static/Dockerfile", response_class=PlainTextResponse)
+async def serve_dockerfile():
+    """Serve the GPU-ready Jupyter Dockerfile for download by the installer."""
+    df_path = pathlib.Path(__file__).parent.parent / "docker" / "Dockerfile"
+    if not df_path.exists():
+        raise HTTPException(status_code=404, detail="Dockerfile not found on server")
+    return df_path.read_text()
 
 
 if __name__ == "__main__":
