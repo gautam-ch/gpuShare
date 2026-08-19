@@ -16,19 +16,6 @@ import models
 
 from sqlalchemy import text
 
-# Create database tables & auto-migrate schema
-Base.metadata.create_all(bind=engine)
-try:
-    with engine.connect() as conn:
-        conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS token VARCHAR;"))
-        conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS jupyter_url VARCHAR;"))
-        conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS cpu_cores INTEGER DEFAULT 2;"))
-        conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS ram_gb INTEGER DEFAULT 8;"))
-        conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS started_at TIMESTAMP DEFAULT NOW();"))
-        conn.commit()
-except Exception as e:
-    print(f"Schema migration note: {e}")
-
 app = FastAPI(title="GPU Sharing Backend")
 
 app.add_middleware(
@@ -37,6 +24,26 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.on_event("startup")
+def startup_db():
+    """Create database tables & auto-migrate schema safely on application startup."""
+    try:
+        Base.metadata.create_all(bind=engine)
+        with engine.connect() as conn:
+            conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS token VARCHAR;"))
+            conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS jupyter_url VARCHAR;"))
+            conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS cpu_cores INTEGER DEFAULT 2;"))
+            conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS ram_gb INTEGER DEFAULT 8;"))
+            conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;"))
+            conn.commit()
+        print("Database schema successfully initialized and migrated.")
+    except Exception as e:
+        print(f"Schema migration note: {e}")
+
+@app.get("/")
+async def root():
+    return {"status": "ok", "service": "gpu-share-backend"}
 
 # ---------------------------------------------------------------
 # CONFIGURATION
