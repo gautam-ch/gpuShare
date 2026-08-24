@@ -385,15 +385,17 @@ def send_heartbeat():
                 t_token = job.get("token")
                 req_cpu = job.get("cpu_cores", 2)
                 req_ram = job.get("ram_gb", 8)
+                req_vram = float(job.get("vram_gb", 2.0))
 
                 # Clamp to provider max limits
                 cpu_cores = min(req_cpu, PROVIDER_CONFIG.get("shared_cpus", 4))
                 ram_gb = min(req_ram, int(PROVIDER_CONFIG.get("shared_ram_gb", 8.0)))
+                vram_gb = min(req_vram, float(PROVIDER_CONFIG.get("shared_vram_gb", 4.0)))
 
-                print(f"[Agent] Received new job #{j_id}! (Allocated: {cpu_cores} CPUs, {ram_gb}GB RAM) Starting Jupyter...")
+                print(f"[Agent] Received new job #{j_id}! (Allocated: {vram_gb:.1f}GB VRAM, {cpu_cores} CPUs, {ram_gb}GB RAM) Starting Jupyter...")
                 threading.Thread(
                     target=_launch_jupyter_bg,
-                    args=(j_id, t_token, tailscale_ip, cpu_cores, ram_gb),
+                    args=(j_id, t_token, tailscale_ip, cpu_cores, ram_gb, vram_gb),
                     daemon=True
                 ).start()
 
@@ -538,14 +540,16 @@ if FLASK_AVAILABLE:
         machine_ip: str = "127.0.0.1",
         cpu_cores: int = 2,
         ram_gb: int = 8,
+        vram_gb: float = 2.0,
     ):
         """
         Background thread:
         1. Find a free port (supports multiple instances simultaneously)
-        2. Apply Docker cgroup resource caps (CPU + RAM)
-        3. Start container with GPU passthrough
-        4. Wait for Jupyter HTTP server to be fully ready
-        5. Create dedicated Cloudflare tunnel for this specific pod
+        2. Apply Docker cgroup resource caps (CPU + RAM) & cpuset CPU masking
+        3. Inject auto-locking VRAM fraction script for PyTorch
+        4. Start container with GPU passthrough & security sandboxing
+        5. Wait for Jupyter HTTP server to be fully ready
+        6. Create dedicated Cloudflare tunnel for this specific pod
         """
         try:
             client = docker.from_env()
@@ -575,8 +579,40 @@ if FLASK_AVAILABLE:
             cpu_quota = cpu_cores * cpu_period
             mem_limit = f"{ram_gb}g"
 
-            print(f"[Agent] [{job_id}] Launching concurrent pod '{container_name}' on port {host_port} "
-                  f"(Caps: {cpu_cores} CPUs, {ram_gb}GB RAM, GPU: {'Yes' if GPU_AVAILABLE else 'No'})...")
+            # CPU Core masking: restricts process to specific CPU cores so os.cpu_count() matches allocation
+            total_host_cpus = os.cpu_count() or 4
+            cpuset_cpus = f"0-{cpu_cores - 1}" if cpu_cores < total_host_cpus else None
+
+            # Calculate VRAM fraction (e.g. 2.0 / 4.0 = 0.50)
+            hw = get_system_hardware()
+            total_vram_gb = max(0.5, float(hw.get("total_vram_gb", 4.0)))
+            vram_fraction = min(1.0, max(0.05, vram_gb / total_vram_gb))
+
+            # Auto-inject PyTorch VRAM locking startup hook into IPython
+            startup_dir = os.path.join(BASE_DIR, "pod_configs", container_name, "startup")
+            os.makedirs(startup_dir, exist_ok=True)
+            startup_hook = os.path.join(startup_dir, "00-gpushare-vram-cap.py")
+            with open(startup_hook, "w", encoding="utf-8") as f:
+                f.write(f"""# GPU Share Hub — Automatic Hardware Sandbox Initialization
+import os, sys
+try:
+    import torch
+    if torch.cuda.is_available():
+        torch.cuda.set_per_process_memory_fraction({vram_fraction:.4f}, 0)
+        print(f"🔒 [GPU Share Hub] Sandbox VRAM Limit Locked: {vram_gb:.1f} GB ({vram_fraction*100:.1f}% of GPU)")
+except Exception as _e:
+    pass
+""")
+
+            volumes = {
+                startup_dir: {
+                    'bind': '/home/jovyan/.ipython/profile_default/startup',
+                    'mode': 'ro'
+                }
+            }
+
+            print(f"[Agent] [{job_id}] Launching sandbox pod '{container_name}' on port {host_port} "
+                  f"(Caps: {vram_gb:.1f}GB VRAM, {cpu_cores} CPUs, {ram_gb}GB RAM, GPU: {'Yes' if GPU_AVAILABLE else 'No'})...")
 
             # Launch command compatible with both custom CUDA image and official jupyter stacks
             if "gpu-jupyter" in image_to_use:
@@ -601,24 +637,31 @@ if FLASK_AVAILABLE:
                     "--NotebookApp.disable_check_xsrf=True",
                 ]
 
-            container = client.containers.run(
-                image_to_use,
-                detach=True,
-                ports={"8888/tcp": host_port},
-                cpu_period=cpu_period,
-                cpu_quota=cpu_quota,
-                mem_limit=mem_limit,
-                memswap_limit=mem_limit,
-                device_requests=device_requests,
-                environment={
+            run_kwargs = {
+                "image": image_to_use,
+                "detach": True,
+                "ports": {"8888/tcp": host_port},
+                "cpu_period": cpu_period,
+                "cpu_quota": cpu_quota,
+                "mem_limit": mem_limit,
+                "memswap_limit": mem_limit,
+                "device_requests": device_requests,
+                "volumes": volumes,
+                "environment": {
                     "JUPYTER_TOKEN": token,
-                    "GRANT_SUDO": "yes",
+                    "GRANT_SUDO": "no",
                     "CUDA_VISIBLE_DEVICES": "0",
+                    "GPUSHARE_VRAM_GB": str(vram_gb),
                 },
-                remove=True,
-                name=container_name,
-                command=cmd
-            )
+                "security_opt": ["no-new-privileges:true"],
+                "remove": True,
+                "name": container_name,
+                "command": cmd
+            }
+            if cpuset_cpus:
+                run_kwargs["cpuset_cpus"] = cpuset_cpus
+
+            container = client.containers.run(**run_kwargs)
             print(f"[Agent] [{job_id}] Pod online: {container.short_id} on port {host_port}")
 
             # Actively poll until this pod's Jupyter is ready

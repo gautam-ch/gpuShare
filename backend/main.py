@@ -108,6 +108,7 @@ async def receive_heartbeat(payload: HeartbeatPayload, db: Session = Depends(get
             "token": j.token,
             "cpu_cores": j.cpu_cores if j.cpu_cores else 2,
             "ram_gb": j.ram_gb if j.ram_gb else 8,
+            "vram_gb": (j.vram_required / 1024.0) if j.vram_required else 2.0,
         })
         j.status = "assigned"  # Flip immediately — won't be re-dispatched
     

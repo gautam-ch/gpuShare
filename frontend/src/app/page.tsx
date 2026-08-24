@@ -12,7 +12,6 @@ export default function Home() {
         <nav className="flex items-center gap-6">
           <Link href="/jupyter" className="text-sm hover:text-emerald-400 transition-colors">Jupyter Workspace</Link>
           <Link href="/host" className="text-sm hover:text-cyan-400 transition-colors">Host GPU</Link>
-          <Link href="/admin" className="text-sm px-3 py-1 bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 hover:bg-indigo-500/20 rounded-lg transition-colors">Admin</Link>
         </nav>
       </header>
       <RentForm />
