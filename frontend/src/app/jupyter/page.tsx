@@ -156,7 +156,7 @@ function JupyterWorkspace() {
 
         <nav className="flex items-center gap-2 sm:gap-4 text-sm font-medium text-gray-600">
           <Link href="/" className="px-3 py-1.5 hover:text-gray-900 transition-colors rounded hover:bg-gray-100">
-            ← Spawner
+            Spawner
           </Link>
           <Link href="/host" className="px-3 py-1.5 hover:text-gray-900 transition-colors rounded hover:bg-gray-100">
             Host Node
@@ -184,7 +184,7 @@ function JupyterWorkspace() {
               <input
                 id="token-input"
                 type="text"
-                placeholder="Paste session token…"
+                placeholder="Paste session token..."
                 value={token}
                 onChange={e => setToken(e.target.value)}
                 disabled={loading}
@@ -211,15 +211,15 @@ function JupyterWorkspace() {
             {loading && (
               <div className="bg-gray-50 border border-gray-200 rounded p-3 text-xs text-gray-600 space-y-1">
                 <div className="font-semibold text-gray-800">Spawning Status:</div>
-                <p>✓ Node Reserved</p>
+                <p>Node Reserved</p>
                 <p className={progressIdx >= 1 ? 'font-medium text-gray-900' : 'text-gray-400'}>
-                  {progressIdx >= 1 ? '⏳ Starting Container…' : '— Container initialization'}
+                  {progressIdx >= 1 ? 'Starting Container...' : 'Container initialization'}
                 </p>
                 <p className={progressIdx >= 4 ? 'font-medium text-gray-900' : 'text-gray-400'}>
-                  {progressIdx >= 4 ? '⏳ Establishing secure connection…' : '— Network tunnel'}
+                  {progressIdx >= 4 ? 'Establishing secure connection...' : 'Network tunnel'}
                 </p>
                 <p className="text-[11px] text-gray-400 italic pt-1">
-                  Note: Initial image pull may take ~1-2 minutes.
+                  Note: Initial image pull may take 1-2 minutes.
                 </p>
               </div>
             )}
@@ -251,14 +251,13 @@ function JupyterWorkspace() {
                 className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-800 border border-gray-300 px-3 py-1.5 rounded transition font-medium flex items-center gap-1"
               >
                 <span>Open in New Window</span>
-                <span>↗</span>
               </a>
               <button
                 onClick={handleStopSession}
                 disabled={stopping}
                 className="text-xs bg-red-50 hover:bg-red-100 border border-red-200 text-red-700 px-3 py-1.5 rounded transition font-medium disabled:opacity-50 cursor-pointer"
               >
-                {stopping ? 'Stopping…' : 'Stop Server'}
+                {stopping ? 'Stopping...' : 'Stop Server'}
               </button>
             </div>
           </div>

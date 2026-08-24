@@ -162,7 +162,7 @@ export default function AdminDashboard() {
             onClick={fetchAll}
             className="text-xs bg-white hover:bg-gray-50 border border-gray-300 text-gray-700 px-2.5 py-1.5 rounded transition font-medium cursor-pointer"
           >
-            ↻ Refresh
+            Refresh
           </button>
           <div className="w-px h-5 bg-gray-200" />
           <nav className="flex items-center gap-2 text-sm font-medium text-gray-600">
@@ -220,7 +220,7 @@ export default function AdminDashboard() {
           </div>
 
           {loading ? (
-            <div className="p-8 text-center text-sm text-gray-500">Loading nodes…</div>
+            <div className="p-8 text-center text-sm text-gray-500">Loading nodes...</div>
           ) : machines.length === 0 ? (
             <div className="p-8 text-center text-sm text-gray-500">
               No worker nodes registered yet.
@@ -268,7 +268,7 @@ export default function AdminDashboard() {
           </div>
 
           {loading ? (
-            <div className="p-8 text-center text-sm text-gray-500">Loading jobs…</div>
+            <div className="p-8 text-center text-sm text-gray-500">Loading jobs...</div>
           ) : recentJobs.length === 0 ? (
             <div className="p-8 text-center text-sm text-gray-500">
               No jobs dispatched yet.
@@ -304,7 +304,7 @@ export default function AdminDashboard() {
                             rel="noopener noreferrer"
                             className="inline-flex items-center gap-1 text-orange-600 hover:text-orange-700 font-medium underline"
                           >
-                            Open ↗
+                            Open
                           </a>
                         ) : (
                           <span className="text-gray-400">—</span>

@@ -6,7 +6,6 @@ const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:800
 interface Preset {
   id: string
   name: string
-  icon: string
   badge: string
   vram: number
   cpus: number
@@ -28,7 +27,6 @@ const PRESETS: Preset[] = [
   {
     id: 'starter',
     name: 'Intro ML & Data Science',
-    icon: '📊',
     badge: 'Standard Tier',
     vram: 2,
     cpus: 2,
@@ -39,7 +37,6 @@ const PRESETS: Preset[] = [
   {
     id: 'vision',
     name: 'Computer Vision & CNNs',
-    icon: '👁️',
     badge: 'Recommended',
     vram: 4,
     cpus: 4,
@@ -50,7 +47,6 @@ const PRESETS: Preset[] = [
   {
     id: 'deeplearning',
     name: 'Deep Learning & GenAI',
-    icon: '⚡',
     badge: 'High Performance',
     vram: 8,
     cpus: 6,
@@ -200,7 +196,7 @@ export default function RentForm() {
               onClick={() => setShowGuide(!showGuide)}
               className="text-xs text-orange-600 hover:text-orange-700 hover:underline font-medium flex items-center gap-1 cursor-pointer"
             >
-              {showGuide ? '▲ Hide Resource Guide' : '▼ Sizing Guide & Help'}
+              {showGuide ? 'Hide Resource Guide' : 'Sizing Guide & Help'}
             </button>
           </div>
 
@@ -267,10 +263,7 @@ export default function RentForm() {
                 >
                   <div>
                     <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xl">{preset.icon}</span>
-                        <span className="font-bold text-gray-900 text-sm">{preset.name}</span>
-                      </div>
+                      <span className="font-bold text-gray-900 text-sm">{preset.name}</span>
                       <input
                         type="radio"
                         name="preset"

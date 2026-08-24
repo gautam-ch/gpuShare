@@ -18,7 +18,7 @@ function CopyBox({ text }: { text: string }) {
         onClick={copy}
         className="absolute top-2.5 right-2.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 px-3 py-1 rounded text-xs text-gray-200 transition font-sans font-medium cursor-pointer"
       >
-        {copied ? '✓ Copied' : 'Copy'}
+        {copied ? 'Copied' : 'Copy'}
       </button>
     </div>
   )
@@ -81,7 +81,7 @@ export default function HostPage() {
 
         <nav className="flex items-center gap-2 sm:gap-4 text-sm font-medium text-gray-600">
           <Link href="/" className="px-3 py-1.5 hover:text-gray-900 transition-colors rounded hover:bg-gray-100">
-            ← Spawner
+            Spawner
           </Link>
           <Link href="/jupyter" className="px-3 py-1.5 hover:text-gray-900 transition-colors rounded hover:bg-gray-100">
             Workspace
@@ -108,8 +108,8 @@ export default function HostPage() {
 
         {/* Network & Security Note */}
         <div className="bg-white border border-gray-200 rounded-lg p-5 text-xs text-gray-600 space-y-2.5 shadow-xs">
-          <h3 className="font-bold text-gray-900 text-sm flex items-center gap-1.5">
-            <span>🔒 Secure Peer-to-Peer Tunneling</span>
+          <h3 className="font-bold text-gray-900 text-sm">
+            Secure Peer-to-Peer Tunneling
           </h3>
           <p className="leading-relaxed">
             The agent uses <strong>Tailscale WireGuard mesh networking</strong> to establish direct, end-to-end encrypted tunnels through NAT and firewalls (such as university or residential networks) without requiring open router ports.
@@ -194,7 +194,7 @@ export default function HostPage() {
             ) : (
               <div className="space-y-3">
                 <div className="flex items-center gap-2 text-green-800 font-bold text-base">
-                  <span>✓ Node successfully connected!</span>
+                  <span>Node successfully connected</span>
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs font-mono">
                   <div className="bg-white p-2.5 rounded border border-gray-200">
