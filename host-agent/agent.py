@@ -588,24 +588,31 @@ if FLASK_AVAILABLE:
             total_vram_gb = max(0.5, float(hw.get("total_vram_gb", 4.0)))
             vram_fraction = min(1.0, max(0.05, vram_gb / total_vram_gb))
 
-            vram_py_code = f"import torch; torch.cuda.is_available() and torch.cuda.set_per_process_memory_fraction({vram_fraction:.4f}, 0)"
-
             print(f"[Agent] [{job_id}] Launching sandbox pod '{container_name}' on port {host_port} "
-                  f"(Caps: {vram_gb:.1f}GB VRAM [{vram_fraction*100:.1f}%], {cpu_cores} CPUs, {ram_gb}GB RAM, GPU: {'Yes' if GPU_AVAILABLE else 'No'})...")
+                  f"(Caps: {vram_gb:.1f}GB VRAM, {cpu_cores} CPUs, {ram_gb}GB RAM, GPU: {'Yes' if GPU_AVAILABLE else 'No'})...")
 
-            # Inline startup shell script that writes ipython_config.py before launching Jupyter
-            startup_sh = (
-                f"mkdir -p /home/jovyan/.ipython/profile_default && "
-                f"echo \"c.InteractiveShellApp.exec_lines = ['{vram_py_code}']\" > /home/jovyan/.ipython/profile_default/ipython_config.py && "
-                f"exec start-notebook.sh "
-                f"--NotebookApp.token='{token}' "
-                f"--NotebookApp.allow_origin='*' "
-                f"--NotebookApp.allow_remote_access=True "
-                f"--NotebookApp.disable_check_xsrf=True "
-                f"--NotebookApp.tornado_settings='{{\"headers\":{{\"Content-Security-Policy\":\"frame-ancestors *\"}}}}'"
-            )
-
-            cmd = ["bash", "-c", startup_sh]
+            # Clean native command line for reliable kernel startup
+            if "gpu-jupyter" in image_to_use:
+                cmd = [
+                    "python3", "-m", "notebook",
+                    "--ip=0.0.0.0",
+                    "--port=8888",
+                    "--no-browser",
+                    f"--NotebookApp.token={token}",
+                    "--NotebookApp.allow_origin=*",
+                    "--NotebookApp.allow_remote_access=True",
+                    "--NotebookApp.disable_check_xsrf=True",
+                    "--NotebookApp.tornado_settings={\"headers\":{\"Content-Security-Policy\":\"frame-ancestors *\"}}",
+                ]
+            else:
+                cmd = [
+                    "start-notebook.sh",
+                    f"--NotebookApp.token={token}",
+                    "--NotebookApp.allow_origin=*",
+                    "--NotebookApp.allow_remote_access=True",
+                    "--NotebookApp.tornado_settings={\"headers\":{\"Content-Security-Policy\":\"frame-ancestors *\"}}",
+                    "--NotebookApp.disable_check_xsrf=True",
+                ]
 
             run_kwargs = {
                 "image": image_to_use,
