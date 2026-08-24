@@ -107,6 +107,34 @@ function JupyterWorkspace() {
     }
   }
 
+  const [stopping, setStopping] = useState(false)
+
+  const handleStopSession = async () => {
+    if (!confirm("Are you sure you want to end this session? Your container will be deleted and all GPU/RAM resources will be freed.")) {
+      return
+    }
+    setStopping(true)
+    try {
+      const res = await fetch(`${BACKEND_URL}/stop-session`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token })
+      })
+      if (res.ok) {
+        setLaunched(false)
+        setUrl('')
+        setToken('')
+        setMessage('✅ Session ended successfully! All hardware resources have been released.')
+      } else {
+        alert('Failed to terminate session')
+      }
+    } catch {
+      alert('Failed to reach backend')
+    } finally {
+      setStopping(false)
+    }
+  }
+
   return (
     <main className="min-h-screen text-white flex flex-col">
       <header className="border-b border-white/10 px-6 py-4 flex justify-between items-center shrink-0">
@@ -168,15 +196,24 @@ function JupyterWorkspace() {
       ) : (
         <div className="flex-1 flex flex-col">
           <div className="px-4 py-2 bg-slate-900 border-b border-white/10 flex items-center justify-between shrink-0">
-            <span className="text-xs text-slate-400 font-mono">{url}</span>
-            <a
-              href={url}
-              target="_blank"
-              rel="noreferrer"
-              className="text-xs bg-cyan-600 hover:bg-cyan-500 px-3 py-1 rounded transition"
-            >
-              Open in new tab ↗
-            </a>
+            <span className="text-xs text-slate-400 font-mono truncate max-w-md">{url}</span>
+            <div className="flex items-center gap-3">
+              <a
+                href={url}
+                target="_blank"
+                rel="noreferrer"
+                className="text-xs bg-cyan-600 hover:bg-cyan-500 px-3 py-1.5 rounded-lg transition font-medium"
+              >
+                Open in new tab ↗
+              </a>
+              <button
+                onClick={handleStopSession}
+                disabled={stopping}
+                className="text-xs bg-rose-600/20 hover:bg-rose-600 border border-rose-500/30 hover:border-rose-500 text-rose-300 hover:text-white px-3 py-1.5 rounded-lg transition font-medium disabled:opacity-50"
+              >
+                {stopping ? 'Stopping…' : '🛑 End Session'}
+              </button>
+            </div>
           </div>
           <iframe
             src={url}

@@ -93,12 +93,10 @@ async def receive_heartbeat(payload: HeartbeatPayload, db: Session = Depends(get
         )
         db.add(machine)
     
-    # Only dispatch PENDING jobs — 'assigned' means already sent to agent
-    # Once dispatched we flip to 'assigned' immediately so the next heartbeat
-    # (3s later) does NOT re-send the same job again.
+    # 1. Dispatch PENDING jobs
     pending_jobs = db.query(models.Job).filter(
         models.Job.machine_id == payload.machine_id,
-        models.Job.status == "pending"   # <-- ONLY pending, NOT assigned
+        models.Job.status == "pending"
     ).all()
 
     jobs_to_dispatch = []
@@ -110,10 +108,50 @@ async def receive_heartbeat(payload: HeartbeatPayload, db: Session = Depends(get
             "ram_gb": j.ram_gb if j.ram_gb else 8,
             "vram_gb": (j.vram_required / 1024.0) if j.vram_required else 2.0,
         })
-        j.status = "assigned"  # Flip immediately — won't be re-dispatched
-    
+        j.status = "assigned"
+
+    # 2. Dispatch STOPPING jobs (user ended session)
+    stopping_jobs = db.query(models.Job).filter(
+        models.Job.machine_id == payload.machine_id,
+        models.Job.status == "stopping"
+    ).all()
+
+    jobs_to_stop = []
+    for sj in stopping_jobs:
+        jobs_to_stop.append({
+            "job_id": sj.id,
+            "token": sj.token,
+        })
+        sj.status = "stopped"
+
     db.commit()
-    return {"status": "success", "jobs": jobs_to_dispatch}
+    return {"status": "success", "jobs": jobs_to_dispatch, "stop_jobs": jobs_to_stop}
+
+class StopSessionRequest(BaseModel):
+    token: str
+
+@app.post("/stop-session")
+async def stop_session(req: StopSessionRequest, db: Session = Depends(get_db)):
+    """Mark job as stopping and restore machine capacity immediately."""
+    job = db.query(models.Job).filter(models.Job.token == req.token).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Session token not found")
+
+    if job.status in ["stopped", "terminated"]:
+        return {"status": "already_stopped", "message": "Session is already terminated"}
+
+    job.status = "stopping"
+
+    # Restore VRAM back to machine's free capacity
+    machine = db.query(models.Machine).filter(models.Machine.id == job.machine_id).first()
+    if machine and job.vram_required:
+        machine.vram_free_mb = min(
+            machine.vram_total_mb or 4096.0,
+            (machine.vram_free_mb or 0.0) + job.vram_required
+        )
+
+    db.commit()
+    return {"status": "success", "message": "Session termination initiated"}
 
 class RentRequest(BaseModel):
     vram_required: float

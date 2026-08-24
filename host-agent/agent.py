@@ -363,8 +363,52 @@ def prefetch_image():
 # HEARTBEAT
 # ---------------------------------------------------------------
 
+# Active tunnel processes: token -> subprocess.Popen (one per concurrent pod)
+active_tunnels: dict = {}
+# In-memory job store: job_id -> {"status": "pending|done|error", "public_url": str}
+job_store: dict = {}
+
+def stop_and_cleanup_pod(token: str, job_id: str = ""):
+    """
+    Stop and remove the specific Jupyter container and kill its Cloudflare tunnel.
+    Frees 100% of RAM, CPU, and VRAM back to the host machine.
+    """
+    container_name = f"jupyter-{token[:8]}"
+    print(f"[Agent] 🛑 Terminating session #{job_id} for token {token[:8]}...")
+
+    # 1. Terminate Cloudflare tunnel process
+    if token in active_tunnels:
+        try:
+            active_tunnels[token].terminate()
+            active_tunnels[token].kill()
+            del active_tunnels[token]
+            print(f"[Agent] Cloudflare tunnel closed for token {token[:8]}")
+        except Exception as e:
+            print(f"[Agent] Error closing tunnel: {e}")
+
+    # 2. Stop & Remove Docker Container
+    try:
+        client = docker.from_env()
+        for c in client.containers.list(all=True):
+            if c.name == container_name:
+                try:
+                    c.stop(timeout=5)
+                    c.remove(force=True)
+                    print(f"[Agent] Container '{container_name}' stopped and removed!")
+                except Exception as ce:
+                    print(f"[Agent] Error stopping container: {ce}")
+    except Exception as de:
+        print(f"[Agent] Docker error: {de}")
+
+    # 3. Clean local job store
+    if job_id and job_id in job_store:
+        job_store[job_id] = {"status": "stopped"}
+
+    print(f"[Agent] ✅ Pod '{container_name}' terminated. Host hardware 100% freed!\n")
+
+
 def send_heartbeat():
-    """Send a heartbeat payload to the backend and handle dispatched jobs."""
+    """Send a heartbeat payload to the backend and handle dispatched/stopped jobs."""
     stats = get_gpu_stats()
     tailscale_ip = get_tailscale_ip()
     payload = {
@@ -379,6 +423,8 @@ def send_heartbeat():
         resp = requests.post(BACKEND_URL, json=payload, timeout=5)
         if resp.status_code == 200:
             data = resp.json()
+            
+            # 1. Handle NEW PENDING jobs
             dispatched = data.get("jobs", [])
             for job in dispatched:
                 j_id = str(job.get("job_id"))
@@ -398,6 +444,18 @@ def send_heartbeat():
                     args=(j_id, t_token, tailscale_ip, cpu_cores, ram_gb, vram_gb),
                     daemon=True
                 ).start()
+
+            # 2. Handle STOPPED jobs (user ended session)
+            stop_jobs = data.get("stop_jobs", [])
+            for s_job in stop_jobs:
+                s_id = str(s_job.get("job_id", ""))
+                s_token = s_job.get("token", "")
+                if s_token:
+                    threading.Thread(
+                        target=stop_and_cleanup_pod,
+                        args=(s_token, s_id),
+                        daemon=True
+                    ).start()
 
             vram_free = stats['vram_free_mb']
             gpu_util = stats.get('gpu_util_pct', 0)
@@ -422,9 +480,6 @@ def heartbeat_loop():
 # ---------------------------------------------------------------
 if FLASK_AVAILABLE:
     flask_app = Flask(__name__)
-
-    # Active tunnel processes: token -> subprocess.Popen (one per concurrent pod)
-    active_tunnels: dict = {}
 
     def start_cloudflare_tunnel(port: int, token: str = "", machine_ip: str = "127.0.0.1") -> str:
         """
