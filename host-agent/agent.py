@@ -588,54 +588,25 @@ if FLASK_AVAILABLE:
             total_vram_gb = max(0.5, float(hw.get("total_vram_gb", 4.0)))
             vram_fraction = min(1.0, max(0.05, vram_gb / total_vram_gb))
 
-            # Auto-inject PyTorch VRAM locking startup hook into IPython
-            startup_dir = os.path.join(BASE_DIR, "pod_configs", container_name, "startup")
-            os.makedirs(startup_dir, exist_ok=True)
-            startup_hook = os.path.join(startup_dir, "00-gpushare-vram-cap.py")
-            with open(startup_hook, "w", encoding="utf-8") as f:
-                f.write(f"""# GPU Share Hub — Automatic Hardware Sandbox Initialization
-import os, sys
-try:
-    import torch
-    if torch.cuda.is_available():
-        torch.cuda.set_per_process_memory_fraction({vram_fraction:.4f}, 0)
-        print(f"🔒 [GPU Share Hub] Sandbox VRAM Limit Locked: {vram_gb:.1f} GB ({vram_fraction*100:.1f}% of GPU)")
-except Exception as _e:
-    pass
-""")
-
-            volumes = {
-                startup_dir: {
-                    'bind': '/home/jovyan/.ipython/profile_default/startup',
-                    'mode': 'ro'
-                }
-            }
+            vram_exec_line = f"import torch; torch.cuda.is_available() and torch.cuda.set_per_process_memory_fraction({vram_fraction:.4f}, 0)"
 
             print(f"[Agent] [{job_id}] Launching sandbox pod '{container_name}' on port {host_port} "
-                  f"(Caps: {vram_gb:.1f}GB VRAM, {cpu_cores} CPUs, {ram_gb}GB RAM, GPU: {'Yes' if GPU_AVAILABLE else 'No'})...")
+                  f"(Caps: {vram_gb:.1f}GB VRAM [{vram_fraction*100:.1f}%], {cpu_cores} CPUs, {ram_gb}GB RAM, GPU: {'Yes' if GPU_AVAILABLE else 'No'})...")
 
-            # Launch command compatible with both custom CUDA image and official jupyter stacks
+            # Base Jupyter flags
+            jupyter_flags = [
+                f"--NotebookApp.token={token}",
+                "--NotebookApp.allow_origin=*",
+                "--NotebookApp.allow_remote_access=True",
+                "--NotebookApp.disable_check_xsrf=True",
+                "--NotebookApp.tornado_settings={\"headers\":{\"Content-Security-Policy\":\"frame-ancestors *\"}}",
+                f"--InteractiveShellApp.exec_lines=[\"{vram_exec_line}\"]",
+            ]
+
             if "gpu-jupyter" in image_to_use:
-                cmd = [
-                    "python3", "-m", "notebook",
-                    "--ip=0.0.0.0",
-                    "--port=8888",
-                    "--no-browser",
-                    f"--NotebookApp.token={token}",
-                    "--NotebookApp.allow_origin=*",
-                    "--NotebookApp.allow_remote_access=True",
-                    "--NotebookApp.disable_check_xsrf=True",
-                    "--NotebookApp.tornado_settings={\"headers\":{\"Content-Security-Policy\":\"frame-ancestors *\"}}",
-                ]
+                cmd = ["python3", "-m", "notebook", "--ip=0.0.0.0", "--port=8888", "--no-browser"] + jupyter_flags
             else:
-                cmd = [
-                    "start-notebook.sh",
-                    f"--NotebookApp.token={token}",
-                    "--NotebookApp.allow_origin=*",
-                    "--NotebookApp.allow_remote_access=True",
-                    "--NotebookApp.tornado_settings={\"headers\":{\"Content-Security-Policy\":\"frame-ancestors *\"}}",
-                    "--NotebookApp.disable_check_xsrf=True",
-                ]
+                cmd = ["start-notebook.sh"] + jupyter_flags
 
             run_kwargs = {
                 "image": image_to_use,
@@ -646,12 +617,13 @@ except Exception as _e:
                 "mem_limit": mem_limit,
                 "memswap_limit": mem_limit,
                 "device_requests": device_requests,
-                "volumes": volumes,
                 "environment": {
                     "JUPYTER_TOKEN": token,
                     "GRANT_SUDO": "no",
                     "CUDA_VISIBLE_DEVICES": "0",
                     "GPUSHARE_VRAM_GB": str(vram_gb),
+                    "OMP_NUM_THREADS": str(cpu_cores),
+                    "MKL_NUM_THREADS": str(cpu_cores),
                 },
                 "security_opt": ["no-new-privileges:true"],
                 "remove": True,
