@@ -489,22 +489,20 @@ if ($LASTEXITCODE -eq 0) {{
     Write-Host "    To fix: Open Docker Desktop -> Settings -> General -> Enable WSL2 engine" -ForegroundColor Gray
 }}
 
-# --- STEP 4: Build GPU-ready Jupyter image (once, ~10 min) ---
+# --- STEP 4: Pre-pull official GPU PyTorch Jupyter image ---
 Write-Host ""
-Write-Host "[4/6] Building GPU-ready Jupyter image (only runs once)..." -ForegroundColor Yellow
-$imgCheck = docker images -q gpu-jupyter:latest 2>$null
+Write-Host "[4/6] Checking official Jupyter PyTorch CUDA image..." -ForegroundColor Yellow
+$pyTorchImg = "quay.io/jupyter/pytorch-notebook:cuda12-python-3.11.8"
+$imgCheck = docker images -q $pyTorchImg 2>$null
 if ($imgCheck) {{
-    Write-Host "    gpu-jupyter:latest already built. Skipping." -ForegroundColor Green
+    Write-Host "    PyTorch CUDA image already cached locally." -ForegroundColor Green
 }} else {{
-    Write-Host "    Downloading Dockerfile..."
-    $dockerfilePath = "$env:USERPROFILE\\gpu-jupyter.Dockerfile"
-    Invoke-WebRequest -Uri "{BACKEND_PUBLIC_URL}/static/Dockerfile" -OutFile $dockerfilePath
-    Write-Host "    Building image (this takes ~10 minutes, happens only once)..."
-    docker build -t gpu-jupyter:latest -f $dockerfilePath "$env:USERPROFILE"
+    Write-Host "    Pulling pre-built GPU PyTorch image ($pyTorchImg)..." -ForegroundColor Yellow
+    docker pull $pyTorchImg
     if ($LASTEXITCODE -eq 0) {{
-        Write-Host "    gpu-jupyter:latest built successfully!" -ForegroundColor Green
+        Write-Host "    PyTorch CUDA image pulled successfully!" -ForegroundColor Green
     }} else {{
-        Write-Host "    Image build failed. Will use fallback scipy-notebook." -ForegroundColor Yellow
+        Write-Host "    Warning: Initial pull failed. Agent will pull on demand." -ForegroundColor Yellow
     }}
 }}
 

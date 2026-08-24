@@ -39,8 +39,8 @@ BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8000/heartbeat")
 if not BACKEND_URL.endswith("/heartbeat"):
     BACKEND_URL = BACKEND_URL.rstrip("/") + "/heartbeat"
 
-# Docker image — pre-baked image with PyTorch CUDA 12.1 + common ML libs
-DOCKER_IMAGE = os.environ.get("DOCKER_IMAGE", "jupyter/scipy-notebook:latest")
+# Docker image — official Jupyter PyTorch image with CUDA 12 + PyTorch + TorchVision pre-baked
+DOCKER_IMAGE = os.environ.get("DOCKER_IMAGE", "quay.io/jupyter/pytorch-notebook:cuda12-python-3.11.8")
 
 # Generate or load a stable machine ID
 BASE_DIR = os.path.dirname(os.path.abspath(__file__)) if "__file__" in dir() else "."
@@ -505,27 +505,32 @@ if FLASK_AVAILABLE:
 
     def _get_target_image(client):
         """
-        Pick the best available image on this machine.
-        Priority: our pre-baked GPU image > tensorflow > scipy > base
+        Pick the official pre-baked GPU PyTorch image on this machine.
+        If not cached locally, pull it from the registry so PyTorch is 100% guaranteed.
         """
         preferred_order = [
-            "gpu-jupyter:latest",               # Pre-baked local image with PyTorch
-            "gpushare/gpu-jupyter:latest",
-            "jupyter/tensorflow-notebook",      # TensorFlow image
-            "jupyter/scipy-notebook:latest",    # Fallback
-            "jupyter/scipy-notebook",
+            "quay.io/jupyter/pytorch-notebook:cuda12-python-3.11.8",
+            "quay.io/jupyter/pytorch-notebook:latest",
+            "gpu-jupyter:latest",
             DOCKER_IMAGE,
-            "jupyter/base-notebook"
         ]
         for img in preferred_order:
             try:
                 client.images.get(img)
-                print(f"[Agent] Using image: {img}")
+                print(f"[Agent] Using cached PyTorch image: {img}")
                 return img
             except Exception:
                 pass
-        print(f"[Agent] No cached image found, will pull: {DOCKER_IMAGE}")
-        return DOCKER_IMAGE
+        
+        target = "quay.io/jupyter/pytorch-notebook:cuda12-python-3.11.8"
+        print(f"[Agent] PyTorch image not cached. Pulling official GPU image: {target}...")
+        try:
+            client.images.pull(target)
+            print(f"[Agent] Successfully pulled {target}!")
+            return target
+        except Exception as e:
+            print(f"[Agent] Warning: Failed to pull {target} ({e}), falling back to {DOCKER_IMAGE}")
+            return DOCKER_IMAGE
 
     def _launch_jupyter_bg(
         job_id: str,
