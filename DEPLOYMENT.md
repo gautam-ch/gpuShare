@@ -1,7 +1,6 @@
 # 🌍 Deployment Guide — GPU Share Hub (Worldwide Access)
 
-## Architecture Overview
-
+## Architecture 
 ```
 User (anywhere) ──→ Vercel (frontend) ──→ Railway (backend + PostgreSQL)
                                                  │
