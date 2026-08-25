@@ -114,11 +114,15 @@ function JupyterWorkspace() {
       return
     }
     setStopping(true)
+    let tk = token || searchParams.get('token')
+    if (!tk && url && url.includes('token=')) {
+      tk = url.split('token=')[1].split('&')[0]
+    }
     try {
       const res = await fetch(`${BACKEND_URL}/stop-session`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token })
+        body: JSON.stringify({ token: tk })
       })
       if (res.ok) {
         setLaunched(false)

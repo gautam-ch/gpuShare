@@ -28,18 +28,24 @@ app.add_middleware(
 @app.on_event("startup")
 def startup_db():
     """Create database tables & auto-migrate schema safely on application startup."""
-    try:
-        Base.metadata.create_all(bind=engine)
-        with engine.connect() as conn:
-            conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS token VARCHAR;"))
-            conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS jupyter_url VARCHAR;"))
-            conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS cpu_cores INTEGER DEFAULT 2;"))
-            conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS ram_gb INTEGER DEFAULT 8;"))
-            conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;"))
-            conn.commit()
-        print("Database schema successfully initialized and migrated.")
-    except Exception as e:
-        print(f"Schema migration note: {e}")
+    Base.metadata.create_all(bind=engine)
+
+    def safe_alter(sql):
+        """Run an ALTER TABLE, silently skip if the column already exists (SQLite compatible)."""
+        try:
+            with engine.connect() as conn:
+                conn.execute(text(sql))
+                conn.commit()
+        except Exception:
+            pass  # Column already exists — safe to ignore
+
+    safe_alter("ALTER TABLE jobs ADD COLUMN token VARCHAR")
+    safe_alter("ALTER TABLE jobs ADD COLUMN jupyter_url VARCHAR")
+    safe_alter("ALTER TABLE jobs ADD COLUMN cpu_cores INTEGER DEFAULT 2")
+    safe_alter("ALTER TABLE jobs ADD COLUMN ram_gb INTEGER DEFAULT 8")
+    safe_alter("ALTER TABLE jobs ADD COLUMN started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    safe_alter("ALTER TABLE machines ADD COLUMN shared_ram_gb REAL DEFAULT 8.0")
+    print("Database schema successfully initialized and migrated.")
 
 @app.get("/")
 async def root():
@@ -71,6 +77,7 @@ class HeartbeatPayload(BaseModel):
     vram_total_mb: float
     vram_free_mb: float
     cpus: int
+    shared_ram_gb: float = 8.0
     status: str
 
 @app.post("/heartbeat")
@@ -80,6 +87,8 @@ async def receive_heartbeat(payload: HeartbeatPayload, db: Session = Depends(get
     if machine:
         machine.tailscale_ip = payload.tailscale_ip
         machine.vram_free_mb = payload.vram_free_mb
+        machine.cpus = payload.cpus
+        machine.shared_ram_gb = payload.shared_ram_gb
         machine.status = payload.status
         machine.last_heartbeat = datetime.datetime.utcnow()
     else:
@@ -89,6 +98,7 @@ async def receive_heartbeat(payload: HeartbeatPayload, db: Session = Depends(get
             vram_total_mb=payload.vram_total_mb,
             vram_free_mb=payload.vram_free_mb,
             cpus=payload.cpus,
+            shared_ram_gb=payload.shared_ram_gb,
             status=payload.status
         )
         db.add(machine)
@@ -127,18 +137,27 @@ async def receive_heartbeat(payload: HeartbeatPayload, db: Session = Depends(get
     db.commit()
     return {"status": "success", "jobs": jobs_to_dispatch, "stop_jobs": jobs_to_stop}
 
+from typing import Optional
+
 class StopSessionRequest(BaseModel):
-    token: str
+    token: str = ""
+    job_id: int = 0
+    machine_id: str = ""
 
 @app.post("/stop-session")
 async def stop_session(req: StopSessionRequest, db: Session = Depends(get_db)):
-    """Mark job as stopping and restore machine capacity immediately."""
-    job = db.query(models.Job).filter(models.Job.token == req.token).first()
+    """Mark job as stopping, notify agent immediately, and restore machine capacity."""
+    query = db.query(models.Job)
+    job = None
+    if req.token:
+        job = query.filter(models.Job.token == req.token).first()
+    if not job and req.job_id:
+        job = query.filter(models.Job.id == req.job_id).first()
     if not job:
-        raise HTTPException(status_code=404, detail="Session token not found")
+        job = query.filter(models.Job.status.in_(["assigned", "done", "pending"])).order_by(models.Job.id.desc()).first()
 
-    if job.status in ["stopped", "terminated"]:
-        return {"status": "already_stopped", "message": "Session is already terminated"}
+    if not job:
+        return {"status": "no_active_session", "message": "No active session found"}
 
     job.status = "stopping"
 
@@ -151,7 +170,19 @@ async def stop_session(req: StopSessionRequest, db: Session = Depends(get_db)):
         )
 
     db.commit()
-    return {"status": "success", "message": "Session termination initiated"}
+
+    # Instant sub-second agent notification
+    token_to_stop = job.token or ""
+    try:
+        agent_url = f"http://{machine.tailscale_ip if machine and machine.tailscale_ip else '127.0.0.1'}:9000/stop-container"
+        requests.post(agent_url, json={"container_name": f"jupyter-{token_to_stop[:8]}"}, timeout=2)
+    except Exception:
+        try:
+            requests.post("http://127.0.0.1:9000/stop-container", json={"container_name": f"jupyter-{token_to_stop[:8]}"}, timeout=2)
+        except Exception:
+            pass
+
+    return {"status": "success", "message": "Session termination initiated", "job_id": job.id}
 
 class RentRequest(BaseModel):
     vram_required: float
@@ -204,6 +235,18 @@ async def rent_gpu(req: RentRequest, db: Session = Depends(get_db)):
         raise HTTPException(
             status_code=404,
             detail=f"Requested {req.vram_required:.1f} GB VRAM & {req.cpu_cores} CPUs, but online machines have max {max_vram_avail:.1f} GB VRAM & {max_cpus_avail} CPUs. Try selecting {max_vram_avail:.1f} GB or less."
+        )
+
+    # Validate CPU and RAM against provider's sharing limits
+    if req.cpu_cores > (machine.cpus or 999):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Requested {req.cpu_cores} CPU cores exceeds provider's sharing limit of {machine.cpus} cores."
+        )
+    if req.ram_gb > (machine.shared_ram_gb or 999):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Requested {req.ram_gb} GB RAM exceeds provider's sharing limit of {machine.shared_ram_gb} GB."
         )
 
     access_token = uuid.uuid4().hex
@@ -294,6 +337,7 @@ async def list_machines(db: Session = Depends(get_db)):
             "vram_total_mb": m.vram_total_mb,
             "vram_free_mb": m.vram_free_mb,
             "cpus": m.cpus,
+            "shared_ram_gb": m.shared_ram_gb or 8.0,
             "status": m.status if m.last_heartbeat and m.last_heartbeat >= cutoff else "offline",
             "last_heartbeat": m.last_heartbeat.isoformat() if m.last_heartbeat else None,
         }

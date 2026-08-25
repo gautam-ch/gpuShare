@@ -66,6 +66,7 @@ export default function RentForm() {
   const [onlineMachines, setOnlineMachines] = useState<Machine[]>([])
   const [maxAvailableVram, setMaxAvailableVram] = useState<number | null>(null)
   const [maxAvailableCpus, setMaxAvailableCpus] = useState<number | null>(null)
+  const [maxAvailableRam, setMaxAvailableRam] = useState<number | null>(null)
 
   const [message, setMessage] = useState('')
   const [token, setToken] = useState('')
@@ -79,20 +80,21 @@ export default function RentForm() {
         const res = await fetch(`${BACKEND_URL}/machines`)
         if (res.ok) {
           const data: Machine[] = await res.json()
-          const live = data.filter(m => m.status === 'online')
+          const live = data.filter((m: Machine & { shared_ram_gb?: number }) => m.status === 'online')
           setOnlineMachines(live)
           if (live.length > 0) {
-            const maxV = Math.max(...live.map(m => (m.vram_free_mb || 0) / 1024))
-            const maxC = Math.max(...live.map(m => m.cpus || 0))
+            const maxV = Math.max(...live.map((m: Machine) => (m.vram_free_mb || 0) / 1024))
+            const maxC = Math.max(...live.map((m: Machine) => m.cpus || 0))
+            const maxR = Math.max(...live.map((m: Machine & { shared_ram_gb?: number }) => m.shared_ram_gb || 0))
             const roundedMaxV = Math.floor(maxV * 10) / 10
             setMaxAvailableVram(roundedMaxV)
             setMaxAvailableCpus(maxC)
+            setMaxAvailableRam(maxR > 0 ? maxR : null)
 
-            // Auto-adjust initial preset if 4GB is greater than max available
-            if (roundedMaxV < 4 && roundedMaxV > 0) {
-              setVram(roundedMaxV >= 2 ? 2 : roundedMaxV)
-              setSelectedPreset('starter')
-            }
+            // Auto-clamp current selections to provider limits (functional update = always fresh state)
+            if (roundedMaxV > 0) setVram(prev => Math.min(prev, roundedMaxV))
+            if (maxC > 0) setCpuCores(prev => Math.min(prev, maxC))
+            if (maxR > 0) setRamGb(prev => Math.min(prev, maxR))
           }
         }
       } catch (e) {
@@ -154,6 +156,7 @@ export default function RentForm() {
 
   const isOverVram = maxAvailableVram !== null && vram > maxAvailableVram
   const isOverCpu = maxAvailableCpus !== null && cpuCores > maxAvailableCpus
+  const isOverRam = maxAvailableRam !== null && ramGb > maxAvailableRam
 
   return (
     <section className="space-y-8 pb-12 max-w-5xl mx-auto">
@@ -325,23 +328,24 @@ export default function RentForm() {
             </div>
             <div className="grid grid-cols-6 gap-2">
               {[1, 2, 4, 6, 8, 12].map(v => {
-                const disabled = maxAvailableVram !== null && v > maxAvailableVram
+                const isDisabled = maxAvailableVram !== null && v > maxAvailableVram
                 const active = vram === v
                 return (
                   <button
                     key={v}
                     type="button"
-                    onClick={() => handleCustomChange('vram', v)}
-                    className={`py-2 text-xs font-mono font-bold rounded border transition-colors cursor-pointer ${
+                    disabled={isDisabled}
+                    onClick={() => !isDisabled && handleCustomChange('vram', v)}
+                    className={`py-2 text-xs font-mono font-bold rounded border transition-colors ${
                       active
                         ? 'bg-orange-600 text-white border-orange-600 shadow-xs'
-                        : disabled
+                        : isDisabled
                         ? 'bg-gray-100 border-gray-200 text-gray-400 cursor-not-allowed'
-                        : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+                        : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50 cursor-pointer'
                     }`}
                   >
                     {v} GB
-                    {disabled && <span className="block text-[9px] font-sans font-normal text-gray-400">Offline</span>}
+                    {isDisabled && <span className="block text-[9px] font-sans font-normal text-gray-400">Over cap</span>}
                   </button>
                 )
               })}
@@ -360,22 +364,24 @@ export default function RentForm() {
             </div>
             <div className="grid grid-cols-5 gap-2">
               {[1, 2, 4, 6, 8].map(c => {
-                const disabled = maxAvailableCpus !== null && c > maxAvailableCpus
+                const isDisabled = maxAvailableCpus !== null && c > maxAvailableCpus
                 const active = cpuCores === c
                 return (
                   <button
                     key={c}
                     type="button"
-                    onClick={() => handleCustomChange('cpu', c)}
-                    className={`py-2 text-xs font-mono font-bold rounded border transition-colors cursor-pointer ${
+                    disabled={isDisabled}
+                    onClick={() => !isDisabled && handleCustomChange('cpu', c)}
+                    className={`py-2 text-xs font-mono font-bold rounded border transition-colors ${
                       active
                         ? 'bg-gray-900 text-white border-gray-900 shadow-xs'
-                        : disabled
+                        : isDisabled
                         ? 'bg-gray-100 border-gray-200 text-gray-400 cursor-not-allowed'
-                        : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+                        : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50 cursor-pointer'
                     }`}
                   >
                     {c} {c === 1 ? 'Core' : 'Cores'}
+                    {isDisabled && <span className="block text-[9px] font-sans font-normal text-gray-400">Over cap</span>}
                   </button>
                 )
               })}
@@ -394,19 +400,24 @@ export default function RentForm() {
             </div>
             <div className="grid grid-cols-5 gap-2">
               {[2, 4, 8, 12, 16].map(r => {
+                const isDisabled = maxAvailableRam !== null && r > maxAvailableRam
                 const active = ramGb === r
                 return (
                   <button
                     key={r}
                     type="button"
-                    onClick={() => handleCustomChange('ram', r)}
-                    className={`py-2 text-xs font-mono font-bold rounded border transition-colors cursor-pointer ${
+                    disabled={isDisabled}
+                    onClick={() => !isDisabled && handleCustomChange('ram', r)}
+                    className={`py-2 text-xs font-mono font-bold rounded border transition-colors ${
                       active
                         ? 'bg-gray-900 text-white border-gray-900 shadow-xs'
-                        : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+                        : isDisabled
+                        ? 'bg-gray-100 border-gray-200 text-gray-400 cursor-not-allowed'
+                        : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50 cursor-pointer'
                     }`}
                   >
                     {r} GB
+                    {isDisabled && <span className="block text-[9px] font-sans font-normal text-gray-400">Over cap</span>}
                   </button>
                 )
               })}
@@ -414,20 +425,21 @@ export default function RentForm() {
           </div>
 
           {/* Capacity Alert */}
-          {(isOverVram || isOverCpu) && (
+          {(isOverVram || isOverCpu || isOverRam) && (
             <div className="bg-amber-50 border border-amber-200 rounded-md p-4 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-amber-800">
               <div>
-                <strong>Warning:</strong> Selected hardware exceeds currently active host nodes (Max: {maxAvailableVram} GB VRAM, {maxAvailableCpus} CPUs).
+                <strong>Warning:</strong> Selection exceeds provider limits (Max: {maxAvailableVram} GB VRAM · {maxAvailableCpus} CPUs · {maxAvailableRam} GB RAM).
               </div>
               <button
                 type="button"
                 onClick={() => {
                   if (maxAvailableVram) setVram(maxAvailableVram)
                   if (maxAvailableCpus) setCpuCores(Math.min(cpuCores, maxAvailableCpus))
+                  if (maxAvailableRam) setRamGb(Math.min(ramGb, maxAvailableRam))
                 }}
                 className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-medium rounded transition cursor-pointer shrink-0"
               >
-                Auto-Adjust to {maxAvailableVram} GB
+                Auto-Adjust to Provider Limits
               </button>
             </div>
           )}

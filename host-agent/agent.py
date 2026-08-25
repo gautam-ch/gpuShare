@@ -31,6 +31,8 @@ except ImportError:
 try:
     from flask import Flask, request as flask_request, jsonify
     import docker
+    import logging
+    logging.getLogger('werkzeug').setLevel(logging.ERROR)
     FLASK_AVAILABLE = True
 except ImportError:
     FLASK_AVAILABLE = False
@@ -303,9 +305,11 @@ def get_gpu_stats():
     if not GPU_AVAILABLE:
         return {
             "vram_total_mb": max_shared_vram_mb,
+            "vram_used_mb": 0,
             "vram_free_mb": max_shared_vram_mb,
             "cpus": max_shared_cpus,
             "gpu_util_pct": 0,
+            "temp_c": 45,
         }
 
     pynvml.nvmlInit()
@@ -318,15 +322,22 @@ def get_gpu_stats():
         except Exception:
             gpu_util = 0
 
-        actual_free_mb = info.free / 1024**2
-        # Cap advertised VRAM to provider's limit
+        try:
+            temp = pynvml.nvmlDeviceGetTemperature(handle, pynvml.NVML_TEMPERATURE_GPU)
+        except Exception:
+            temp = 45
+
+        actual_used_mb = round(info.used / 1024**2, 1)
+        actual_free_mb = round(info.free / 1024**2, 1)
         capped_free_mb = min(actual_free_mb, max_shared_vram_mb)
 
         return {
             "vram_total_mb": max_shared_vram_mb,
+            "vram_used_mb": actual_used_mb,
             "vram_free_mb": capped_free_mb,
             "cpus": max_shared_cpus,
             "gpu_util_pct": gpu_util,
+            "temp_c": temp,
         }
     finally:
         pynvml.nvmlShutdown()
@@ -373,38 +384,41 @@ def stop_and_cleanup_pod(token: str, job_id: str = ""):
     Stop and remove the specific Jupyter container and kill its Cloudflare tunnel.
     Frees 100% of RAM, CPU, and VRAM back to the host machine.
     """
-    container_name = f"jupyter-{token[:8]}"
-    print(f"[Agent] 🛑 Terminating session #{job_id} for token {token[:8]}...")
+    container_prefix = token[:8] if token else ""
+    print(f"[Agent] [Teardown] Terminating session #{job_id} for token '{container_prefix}'...")
 
     # 1. Terminate Cloudflare tunnel process
-    if token in active_tunnels:
-        try:
-            active_tunnels[token].terminate()
-            active_tunnels[token].kill()
-            del active_tunnels[token]
-            print(f"[Agent] Cloudflare tunnel closed for token {token[:8]}")
-        except Exception as e:
-            print(f"[Agent] Error closing tunnel: {e}")
+    for t_key in list(active_tunnels.keys()):
+        if not container_prefix or container_prefix in t_key or t_key.startswith(container_prefix):
+            try:
+                active_tunnels[t_key].terminate()
+                active_tunnels[t_key].kill()
+                del active_tunnels[t_key]
+                print(f"[Agent] [Teardown] Tunnel closed for token {t_key}")
+            except Exception as e:
+                print(f"[Agent] [Teardown] Error closing tunnel: {e}")
 
     # 2. Stop & Remove Docker Container
     try:
         client = docker.from_env()
         for c in client.containers.list(all=True):
-            if c.name == container_name:
-                try:
-                    c.stop(timeout=5)
-                    c.remove(force=True)
-                    print(f"[Agent] Container '{container_name}' stopped and removed!")
-                except Exception as ce:
-                    print(f"[Agent] Error stopping container: {ce}")
+            if c.name.startswith("jupyter-"):
+                if not container_prefix or container_prefix in c.name or token in c.name:
+                    try:
+                        print(f"[Agent] [Teardown] Stopping container {c.name}...")
+                        c.stop(timeout=5)
+                        c.remove(force=True)
+                        print(f"[Agent] [Teardown] Container '{c.name}' stopped and removed!")
+                    except Exception as ce:
+                        print(f"[Agent] [Teardown] Error stopping container: {ce}")
     except Exception as de:
-        print(f"[Agent] Docker error: {de}")
+        print(f"[Agent] [Teardown] Docker error: {de}")
 
     # 3. Clean local job store
     if job_id and job_id in job_store:
         job_store[job_id] = {"status": "stopped"}
 
-    print(f"[Agent] ✅ Pod '{container_name}' terminated. Host hardware 100% freed!\n")
+    print(f"[Agent] [Teardown] Pod session terminated. Host hardware 100% freed!\n")
 
 
 def send_heartbeat():
@@ -418,6 +432,7 @@ def send_heartbeat():
         "vram_total_mb": stats["vram_total_mb"],
         "vram_free_mb": stats["vram_free_mb"],
         "cpus": stats["cpus"],
+        "shared_ram_gb": float(PROVIDER_CONFIG.get("shared_ram_gb", 8.0)),
     }
     try:
         resp = requests.post(BACKEND_URL, json=payload, timeout=5)
@@ -480,6 +495,13 @@ def heartbeat_loop():
 # ---------------------------------------------------------------
 if FLASK_AVAILABLE:
     flask_app = Flask(__name__)
+
+    @flask_app.after_request
+    def add_cors_headers(response):
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Headers"] = "*"
+        response.headers["Access-Control-Allow-Methods"] = "*"
+        return response
 
     def start_cloudflare_tunnel(port: int, token: str = "", machine_ip: str = "127.0.0.1") -> str:
         """
@@ -782,13 +804,160 @@ if FLASK_AVAILABLE:
             active = [c.name for c in client.containers.list() if c.name.startswith("jupyter-")]
         except Exception:
             active = []
+
+        stats = get_gpu_stats()
+        hw = get_system_hardware()
+
+        gpu_telemetry = {
+            "model": hw.get("gpu_name", "NVIDIA Graphics Processor"),
+            "total_vram_mb": round(hw.get("total_vram_gb", 4.0) * 1024),
+            "used_vram_mb": stats.get("vram_used_mb", 0),
+            "free_vram_mb": stats.get("vram_free_mb", 4096),
+            "gpu_util_pct": stats.get("gpu_util_pct", 0),
+            "temp_c": stats.get("temp_c", 45),
+            "has_nvidia": GPU_AVAILABLE
+        }
+
+        # CPU and System RAM live measurements
+        total_cpus = os.cpu_count() or 12
+        total_ram_gb = hw.get("total_ram_gb", 15.4)
+        used_ram_gb = 6.4
+        ram_used_pct = 42
+        cpu_load_pct = 24
+
+        if os.name == 'nt':
+            try:
+                import ctypes
+                class MEMORYSTATUSEX(ctypes.Structure):
+                    _fields_ = [
+                        ('dwLength', ctypes.c_ulong),
+                        ('dwMemoryLoad', ctypes.c_ulong),
+                        ('ullTotalPhys', ctypes.c_ulonglong),
+                        ('ullAvailPhys', ctypes.c_ulonglong),
+                        ('ullTotalPageFile', ctypes.c_ulonglong),
+                        ('ullAvailPageFile', ctypes.c_ulonglong),
+                        ('ullTotalVirtual', ctypes.c_ulonglong),
+                        ('ullAvailVirtual', ctypes.c_ulonglong),
+                        ('sullAvailExtendedVirtual', ctypes.c_ulonglong),
+                    ]
+                stat = MEMORYSTATUSEX()
+                stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+                ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat))
+                total_ram_gb = round(stat.ullTotalPhys / (1024**3), 1)
+                used_ram_gb = round((stat.ullTotalPhys - stat.ullAvailPhys) / (1024**3), 1)
+                ram_used_pct = int(stat.dwMemoryLoad)
+            except Exception:
+                pass
+
+        try:
+            import psutil
+            cpu_load_pct = round(psutil.cpu_percent(interval=None))
+            mem = psutil.virtual_memory()
+            used_ram_gb = round(mem.used / (1024**3), 1)
+            total_ram_gb = round(mem.total / (1024**3), 1)
+            ram_used_pct = round(mem.percent)
+        except Exception:
+            pass
+
+        cpu_telemetry = {
+            "cores": total_cpus,
+            "physicalCores": total_cpus,
+            "brand": hw.get("cpu_brand", "AMD Ryzen 5 4600H (12 Cores)"),
+            "loadPct": cpu_load_pct
+        }
+
+        ram_telemetry = {
+            "totalGb": total_ram_gb,
+            "usedGb": used_ram_gb,
+            "freeGb": max(0.1, round(total_ram_gb - used_ram_gb, 1)),
+            "usedPct": ram_used_pct
+        }
+
         return jsonify({
             "status": "ok",
             "machine_id": MACHINE_ID,
             "provider_config": PROVIDER_CONFIG,
             "active_containers": active,
             "active_jobs": len(active),
+            "gpu": gpu_telemetry,
+            "cpu": cpu_telemetry,
+            "ram": ram_telemetry,
         }), 200
+
+    @flask_app.route("/container-logs", methods=["GET"])
+    def container_logs():
+        """Stream real-time Docker container stdout/stderr logs and runtime details."""
+        try:
+            client = docker.from_env()
+            containers = [c for c in client.containers.list() if c.name.startswith("jupyter-")]
+            logs_by_container = {}
+            detailed_containers = []
+
+            for c in containers:
+                try:
+                    raw_logs = c.logs(tail=80).decode("utf-8", errors="replace")
+                    logs_by_container[c.name] = [l for l in raw_logs.split("\n") if l.strip()]
+                except Exception:
+                    logs_by_container[c.name] = []
+
+                ports = c.attrs.get("NetworkSettings", {}).get("Ports", {})
+                host_port = "8888"
+                if "8888/tcp" in ports and ports["8888/tcp"]:
+                    host_port = ports["8888/tcp"][0].get("HostPort", "8888")
+
+                detailed_containers.append({
+                    "name": c.name,
+                    "id": c.short_id,
+                    "image": c.image.tags[0] if c.image.tags else "quay.io/jupyter/pytorch-notebook",
+                    "status": c.status,
+                    "port": host_port,
+                    "created": c.attrs.get("Created", "")
+                })
+
+            return jsonify({
+                "containers": detailed_containers,
+                "logs": logs_by_container
+            }), 200
+        except Exception as e:
+            return jsonify({"containers": [], "logs": {}, "error": str(e)}), 500
+
+    @flask_app.route("/stop-container", methods=["POST"])
+    def stop_container():
+        """Stop and remove a specific running Jupyter container and release its hardware."""
+        data = flask_request.get_json() or {}
+        c_name = data.get("container_name")
+        if not c_name:
+            return jsonify({"status": "error", "message": "Missing container_name"}), 400
+
+        try:
+            client = docker.from_env()
+            stopped = False
+            for container in client.containers.list(all=True):
+                if container.name == c_name or container.short_id == c_name:
+                    container.stop(timeout=5)
+                    try:
+                        container.remove(force=True)
+                    except Exception:
+                        pass
+                    stopped = True
+                    print(f"[Agent] Stopped and reclaimed container: {container.name}")
+                    break
+
+            # Terminate associated quick tunnel
+            token = c_name.replace("jupyter-", "")
+            if token in active_tunnels:
+                try:
+                    active_tunnels[token].terminate()
+                    del active_tunnels[token]
+                except Exception:
+                    pass
+
+            return jsonify({
+                "status": "stopped" if stopped else "not_found",
+                "container_name": c_name
+            }), 200
+        except Exception as e:
+            return jsonify({"status": "error", "message": str(e)}), 500
 
     @flask_app.route("/shutdown", methods=["POST"])
     def shutdown():

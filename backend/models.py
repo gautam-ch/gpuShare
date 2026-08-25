@@ -10,7 +10,8 @@ class Machine(Base):
     tailscale_ip = Column(String, index=True)
     vram_total_mb = Column(Float)
     vram_free_mb = Column(Float)
-    cpus = Column(Integer)
+    cpus = Column(Integer)           # shared CPU limit
+    shared_ram_gb = Column(Float, default=8.0)  # shared RAM limit
     status = Column(String, default="offline")
     last_heartbeat = Column(DateTime, default=datetime.datetime.utcnow)
 
