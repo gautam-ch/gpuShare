@@ -40,3 +40,7 @@ Thumbs.db
 *.log
 scratch/
 SYSTEM_ARCHITECTURE.md
+
+**dist
+**build
+**release
