@@ -5,11 +5,39 @@ const axios = require('axios')
 const { exec, spawn } = require('child_process')
 const fs = require('fs')
 
+function loadEnvFiles() {
+  const envCandidates = [
+    path.join(__dirname, '..', '.env'),
+    path.join(process.cwd(), '.env'),
+    path.join(process.cwd(), '..', 'host-agent', '.env'),
+    path.join(__dirname, '..', '..', 'host-agent', '.env')
+  ]
+
+  for (const envPath of envCandidates) {
+    if (fs.existsSync(envPath)) {
+      try {
+        const content = fs.readFileSync(envPath, 'utf8')
+        for (const line of content.split('\n')) {
+          const trimmed = line.trim()
+          if (trimmed && !trimmed.startsWith('#') && trimmed.includes('=')) {
+            const [key, ...rest] = trimmed.split('=')
+            const val = rest.join('=').trim().replace(/^["']|["']$/g, '')
+            if (key && (!process.env[key.trim()] || process.env[key.trim()].includes('localhost'))) {
+              process.env[key.trim()] = val
+            }
+          }
+        }
+      } catch {}
+    }
+  }
+}
+loadEnvFiles()
+
 let mainWindow
 let agentProcess = null
 
 const AGENT_URL = process.env.AGENT_URL || 'http://localhost:9000'
-const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:8000'
+const BACKEND_URL = (process.env.BACKEND_URL || 'http://localhost:8000').replace(/\/+$/, '')
 
 /**
  * Resolve the host-agent directory across dev and packaged modes.

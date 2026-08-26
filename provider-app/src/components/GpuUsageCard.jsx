@@ -5,25 +5,26 @@ export default function GpuUsageCard({ gpu, providerConfig, activeContainers = [
   const sharedVramGb = providerConfig?.shared_vram_gb || (totalPhysicalVramMb / 1024)
   const sharedVramMb = sharedVramGb * 1024
 
+  const activeCount = activeContainers.length
+
   // Active renter jobs — "done" = Jupyter is live and consuming resources
   const activeJobs = clusterJobs.filter(
     j => j.status === 'done' || j.status === 'assigned' || j.status === 'pending'
   )
 
-  // Client-reserved VRAM = sum of all active jobs' allocations
-  const clientVramMb = activeJobs.reduce((sum, j) => sum + (j.vram_required_mb || 0), 0)
-  const activeCount = activeContainers.length
-
-  // If containers are running but no job data yet, estimate from container count
-  const usedVramMb = clientVramMb > 0
-    ? clientVramMb
-    : (activeCount > 0 ? activeCount * 512 : 0)
+  // Client-reserved VRAM: if no containers are running, usage is strictly 0
+  const clientVramSum = activeJobs.reduce((sum, j) => sum + (j.vram_required_mb || 0), 0)
+  const usedVramMb = activeCount === 0
+    ? 0
+    : (gpu?.client_used_vram_mb !== undefined
+        ? gpu.client_used_vram_mb
+        : (clientVramSum > 0 ? Math.min(clientVramSum, sharedVramMb) : activeCount * 512))
 
   const freeVramMb = Math.max(0, sharedVramMb - usedVramMb)
 
   // Raw NVML GPU core utilization % (actual hardware activity, not our calc)
-  const gpuUtilPct = Math.round(gpu?.gpu_util_pct || (activeCount > 0 ? 14 : 0))
-  const isGpuInUse = activeCount > 0 || clientVramMb > 0 || gpuUtilPct > 5
+  const gpuUtilPct = Math.round(gpu?.gpu_util_pct || 0)
+  const isGpuInUse = activeCount > 0 || usedVramMb > 0 || gpuUtilPct > 5
 
   // Calculate percentage slices relative to total physical VRAM
   const clientPct = Math.min(100, (usedVramMb / totalPhysicalVramMb) * 100)
@@ -139,7 +140,7 @@ export default function GpuUsageCard({ gpu, providerConfig, activeContainers = [
       </div>
 
       <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-between text-xs text-gray-600 font-mono">
-        <span>Hardware VRAM: {(totalPhysicalVramMb / 1024).toFixed(1)} GB total</span>
+        <span>Hardware VRAM: <strong>{((gpu?.used_vram_mb || 0) / 1024).toFixed(2)} / {(totalPhysicalVramMb / 1024).toFixed(1)} GB</strong> Physical (NVML)</span>
         <span className="text-orange-700 font-semibold">Shared Cap: {sharedVramGb.toFixed(1)} GB</span>
       </div>
     </div>

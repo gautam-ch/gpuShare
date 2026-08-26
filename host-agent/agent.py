@@ -37,17 +37,36 @@ try:
 except ImportError:
     FLASK_AVAILABLE = False
 
+# Generate or load a stable machine ID & .env configuration
+BASE_DIR = os.path.dirname(os.path.abspath(__file__)) if "__file__" in dir() else "."
+ENV_FILE = os.path.join(BASE_DIR, ".env")
+MACHINE_ID_FILE = os.path.join(BASE_DIR, "machine_id.txt")
+CONFIG_FILE = os.path.join(BASE_DIR, "host_config.json")
+
+# Automatically load .env file if present
+if os.path.exists(ENV_FILE):
+    try:
+        with open(ENV_FILE, "r", encoding="utf-8") as ef:
+            for line in ef:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    k = k.strip()
+                    v = v.strip().strip('"').strip("'")
+                    if k:
+                        # Overwrite if unset or set to local fallback
+                        if k not in os.environ or "localhost" in os.environ[k] or "127.0.0.1" in os.environ[k]:
+                            os.environ[k] = v
+        print(f"[Agent] Loaded environment variables from {ENV_FILE}")
+    except Exception as e:
+        print(f"[Agent] Note: Failed to read .env file: {e}")
+
 BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8000/heartbeat")
 if not BACKEND_URL.endswith("/heartbeat"):
     BACKEND_URL = BACKEND_URL.rstrip("/") + "/heartbeat"
 
 # Docker image — official Jupyter PyTorch image with CUDA 12 + PyTorch + TorchVision pre-baked
 DOCKER_IMAGE = os.environ.get("DOCKER_IMAGE", "quay.io/jupyter/pytorch-notebook:cuda12-python-3.11.8")
-
-# Generate or load a stable machine ID
-BASE_DIR = os.path.dirname(os.path.abspath(__file__)) if "__file__" in dir() else "."
-MACHINE_ID_FILE = os.path.join(BASE_DIR, "machine_id.txt")
-CONFIG_FILE = os.path.join(BASE_DIR, "host_config.json")
 
 if os.path.exists(MACHINE_ID_FILE):
     with open(MACHINE_ID_FILE, 'r') as f:
@@ -263,6 +282,20 @@ def load_or_prompt_config():
 PROVIDER_CONFIG = load_or_prompt_config()
 
 
+def get_current_provider_config():
+    """
+    Read the latest limits from host_config.json in real-time.
+    Falls back to the initial PROVIDER_CONFIG if the file is unreadable.
+    """
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, 'r') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return PROVIDER_CONFIG
+
+
 # ---------------------------------------------------------------
 # RESOURCE HELPERS
 # ---------------------------------------------------------------
@@ -299,8 +332,8 @@ def get_gpu_stats():
     """
     Return VRAM and CPU stats capped to the provider's configured limits.
     """
-    max_shared_vram_mb = PROVIDER_CONFIG.get("shared_vram_gb", 8.0) * 1024
-    max_shared_cpus = PROVIDER_CONFIG.get("shared_cpus", os.cpu_count() or 4)
+    max_shared_vram_mb = get_current_provider_config().get("shared_vram_gb", 8.0) * 1024
+    max_shared_cpus = get_current_provider_config().get("shared_cpus", os.cpu_count() or 4)
 
     if not GPU_AVAILABLE:
         return {
@@ -341,6 +374,149 @@ def get_gpu_stats():
         }
     finally:
         pynvml.nvmlShutdown()
+
+
+def get_container_metrics():
+    """
+    Query Docker API for real-time CPU & RAM utilization and NVML for VRAM.
+    Returns a dict mapping container name to its usage details.
+    """
+    if not FLASK_AVAILABLE:
+        return {}
+
+    containers_telemetry = {}
+    try:
+        client = docker.from_env()
+        containers = [c for c in client.containers.list() if c.name.startswith("jupyter-")]
+    except Exception:
+        return {}
+
+    # Get GPU processes for mapping VRAM usage
+    nvml_processes = []
+    if GPU_AVAILABLE:
+        try:
+            pynvml.nvmlInit()
+            handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+            nvml_processes = pynvml.nvmlDeviceGetComputeRunningProcesses(handle)
+        except Exception:
+            pass
+        finally:
+            try:
+                pynvml.nvmlShutdown()
+            except Exception:
+                pass
+
+    for container in containers:
+        try:
+            # 1. Get RAM usage from container stats (non-blocking)
+            stats = container.stats(stream=False)
+            
+            # RAM calculation
+            mem_stats = stats.get("memory_stats", {})
+            ram_bytes = mem_stats.get("usage", 0)
+            ram_gb = round(ram_bytes / (1024**3), 2)
+            
+            # CPU calculation
+            cpu_stats = stats.get("cpu_stats", {})
+            precpu_stats = stats.get("precpu_stats", {})
+            
+            cpu_delta = cpu_stats.get("cpu_usage", {}).get("total_usage", 0) - precpu_stats.get("cpu_usage", {}).get("total_usage", 0)
+            system_delta = cpu_stats.get("system_cpu_usage", 0) - precpu_stats.get("system_cpu_usage", 0)
+            
+            cpu_cores_used = 0.0
+            if system_delta > 0 and cpu_delta > 0:
+                online_cpus = cpu_stats.get("online_cpus", len(cpu_stats.get("cpu_usage", {}).get("percpu_usage", [1])))
+                cpu_cores_used = round((cpu_delta / system_delta) * online_cpus, 2)
+            
+            # Get host PIDs of processes in this container
+            container_pids = []
+            try:
+                top_res = container.top()
+                pid_idx = -1
+                for idx, title in enumerate(top_res.get('Titles', [])):
+                    if title.upper() == 'PID':
+                        pid_idx = idx
+                        break
+                if pid_idx != -1:
+                    for p_info in top_res.get('Processes', []):
+                        container_pids.append(int(p_info[pid_idx]))
+            except Exception:
+                try:
+                    container_pids.append(container.attrs['State']['Pid'])
+                except Exception:
+                    pass
+
+            # 2. Get VRAM usage by mapping container's PIDs to NVML processes
+            vram_mb = 0.0
+            
+            # Method A: Container-internal query (required for Windows / WSL2)
+            try:
+                exec_res = container.exec_run("nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader,nounits")
+                if exec_res.exit_code == 0:
+                    lines = exec_res.output.decode("utf-8").strip().split("\n")
+                    for line in lines:
+                        if line.strip() and "," in line:
+                            parts = line.split(",")
+                            try:
+                                vram_mb += float(parts[1].strip())
+                            except ValueError:
+                                pass
+            except Exception:
+                pass
+            
+            # Method B: Host NVML mapping fallback
+            if vram_mb == 0 and GPU_AVAILABLE and nvml_processes:
+                vram_bytes = 0
+                for proc in nvml_processes:
+                    if proc.pid in container_pids:
+                        vram_bytes += proc.usedGpuMemory
+                vram_mb = round(vram_bytes / (1024**2), 1)
+
+            # Method C: Custom telemetry file fallback (required for Windows / WSL2)
+            if vram_mb == 0:
+                try:
+                    # List all telemetry files in the container
+                    exec_ls = container.exec_run("sh -c 'ls -1 /tmp/gpushare_usage_*.json'")
+                    if exec_ls.exit_code == 0:
+                        lines = exec_ls.output.decode("utf-8").strip().split("\n")
+                        for line in lines:
+                            line = line.strip()
+                            if not line or "*" in line:
+                                continue
+                            try:
+                                filename = os.path.basename(line)
+                                pid_str = filename.replace("gpushare_usage_", "").replace(".json", "")
+                                c_pid = int(pid_str)
+                            except ValueError:
+                                continue
+                            
+                            # Check if the process is still running inside the container
+                            check_alive = container.exec_run(f"kill -0 {c_pid}")
+                            if check_alive.exit_code == 0:
+                                exec_cat = container.exec_run(f"cat {line}")
+                                if exec_cat.exit_code == 0:
+                                    import json
+                                    data = json.loads(exec_cat.output.decode("utf-8").strip())
+                                    vram_mb += float(data.get("vram_mb", 0.0))
+                            else:
+                                # Clean up stale telemetry file
+                                container.exec_run(f"rm {line}")
+                except Exception:
+                    pass
+            
+            containers_telemetry[container.name] = {
+                "cpu_cores": cpu_cores_used,
+                "ram_gb": ram_gb,
+                "vram_mb": vram_mb
+            }
+        except Exception:
+            containers_telemetry[container.name] = {
+                "cpu_cores": 0.0,
+                "ram_gb": 0.0,
+                "vram_mb": 0.0
+            }
+
+    return containers_telemetry
 
 
 # ---------------------------------------------------------------
@@ -421,10 +597,327 @@ def stop_and_cleanup_pod(token: str, job_id: str = ""):
     print(f"[Agent] [Teardown] Pod session terminated. Host hardware 100% freed!\n")
 
 
+# ---------------------------------------------------------------
+# HARDWARE OVERLOAD & THERMAL GUARD WATCHDOG
+# ---------------------------------------------------------------
+OVERLOAD_ALERTS: list = []
+
+def overload_watchdog_loop():
+    """
+    Continuous background watchdog:
+    - Protects host hardware against extreme thermal or system exhaustion.
+    - Automatically stops containers if:
+      1. GPU Temperature >= 88°C (Critical Thermal Limit)
+      2. Host Physical RAM is pinned >= 96%
+    """
+    consecutive_ram_spikes = 0
+
+    while True:
+        try:
+            time.sleep(3)
+            # Check for active Jupyter containers
+            try:
+                client = docker.from_env()
+                running_containers = [c for c in client.containers.list() if c.name.startswith("jupyter-")]
+            except Exception:
+                running_containers = []
+
+            if not running_containers:
+                consecutive_ram_spikes = 0
+                continue
+
+            # Get GPU processes for VRAM monitoring
+            nvml_processes = []
+            if GPU_AVAILABLE:
+                try:
+                    pynvml.nvmlInit()
+                    handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+                    nvml_processes = pynvml.nvmlDeviceGetComputeRunningProcesses(handle)
+                except Exception:
+                    pass
+                finally:
+                    try:
+                        pynvml.nvmlShutdown()
+                    except Exception:
+                        pass
+
+            # A. CONTAINER-LEVEL ENFORCEMENT WATCHDOG
+            for container in running_containers:
+                # 1. Parse limits from environment variables
+                env_vars = container.attrs.get("Config", {}).get("Env", [])
+                vram_cap_gb = None
+                cpu_cap_cores = None
+                ram_cap_gb = None
+                for env in env_vars:
+                    if env.startswith("GPUSHARE_VRAM_GB="):
+                        try:
+                            vram_cap_gb = float(env.split("=")[1])
+                        except ValueError:
+                            pass
+                    elif env.startswith("GPUSHARE_CPU_CORES="):
+                        try:
+                            cpu_cap_cores = float(env.split("=")[1])
+                        except ValueError:
+                            pass
+                    elif env.startswith("GPUSHARE_RAM_GB="):
+                        try:
+                            ram_cap_gb = float(env.split("=")[1])
+                        except ValueError:
+                            pass
+
+                # Get host PIDs of processes in this container
+                container_pids = []
+                try:
+                    top_res = container.top()
+                    pid_idx = -1
+                    for idx, title in enumerate(top_res.get('Titles', [])):
+                        if title.upper() == 'PID':
+                            pid_idx = idx
+                            break
+                    if pid_idx != -1:
+                        for p_info in top_res.get('Processes', []):
+                            container_pids.append(int(p_info[pid_idx]))
+                except Exception:
+                    try:
+                        container_pids.append(container.attrs['State']['Pid'])
+                    except Exception:
+                        pass
+
+                if not container_pids:
+                    continue
+
+                # Query process statistics using psutil
+                import psutil
+                proc_details = []
+                for pid in container_pids:
+                    try:
+                        proc = psutil.Process(pid)
+                        mem_bytes = proc.memory_info().rss
+                        cpu_pct = proc.cpu_percent(interval=None)
+                        proc_details.append({
+                            "pid": pid,
+                            "proc": proc,
+                            "mem_bytes": mem_bytes,
+                            "cpu_pct": cpu_pct
+                        })
+                    except Exception:
+                        pass
+
+                # 2. RAM Limit Check
+                container_ram_bytes = sum(p["mem_bytes"] for p in proc_details)
+                container_ram_gb = container_ram_bytes / (1024**3)
+                if ram_cap_gb is not None and container_ram_gb > ram_cap_gb:
+                    alert_text = (
+                        f"[Limit Guard] 🚨 Renter container '{container.name}' exceeded RAM limit! "
+                        f"({container_ram_gb:.2f} GB > {ram_cap_gb:.2f} GB Cap). "
+                        "Terminating the offending memory-consuming process in kernel..."
+                    )
+                    print("\n" + "=" * 60)
+                    print(alert_text)
+                    print("=" * 60 + "\n")
+                    OVERLOAD_ALERTS.append({
+                        "time": time.time(),
+                        "reason": f"RAM Cap Exceeded on {container.name}",
+                        "message": alert_text
+                    })
+                    proc_details.sort(key=lambda x: x["mem_bytes"], reverse=True)
+                    if proc_details:
+                        pid_to_kill = proc_details[0]["pid"]
+                        try:
+                            print(f"[Limit Guard] Sending SIGKILL to host process PID {pid_to_kill} (RAM: {proc_details[0]['mem_bytes']/(1024**2):.1f} MB)")
+                            os.kill(pid_to_kill, 9)
+                        except Exception as e:
+                            print(f"[Limit Guard] Failed to kill PID {pid_to_kill}: {e}")
+
+                # 3. CPU Cores Limit Check
+                container_cpu_cores = sum(p["cpu_pct"] for p in proc_details) / 100.0
+                if cpu_cap_cores is not None and container_cpu_cores > cpu_cap_cores:
+                    global container_cpu_spikes
+                    if 'container_cpu_spikes' not in globals():
+                        container_cpu_spikes = {}
+                    
+                    container_cpu_spikes[container.name] = container_cpu_spikes.get(container.name, 0) + 1
+                    if container_cpu_spikes[container.name] >= 3:
+                        alert_text = (
+                            f"[Limit Guard] 🚨 Renter container '{container.name}' exceeded CPU cores limit! "
+                            f"({container_cpu_cores:.2f} Cores > {cpu_cap_cores:.2f} Cores Cap for 3 consecutive checks). "
+                            "Terminating the offending CPU-consuming process in kernel..."
+                        )
+                        print("\n" + "=" * 60)
+                        print(alert_text)
+                        print("=" * 60 + "\n")
+                        OVERLOAD_ALERTS.append({
+                            "time": time.time(),
+                            "reason": f"CPU Cap Exceeded on {container.name}",
+                            "message": alert_text
+                        })
+                        proc_details.sort(key=lambda x: x["cpu_pct"], reverse=True)
+                        if proc_details:
+                            pid_to_kill = proc_details[0]["pid"]
+                            try:
+                                print(f"[Limit Guard] Sending SIGKILL to host process PID {pid_to_kill} (CPU: {proc_details[0]['cpu_pct']:.1f}%)")
+                                os.kill(pid_to_kill, 9)
+                            except Exception as e:
+                                print(f"[Limit Guard] Failed to kill PID {pid_to_kill}: {e}")
+                        container_cpu_spikes[container.name] = 0
+                else:
+                    if 'container_cpu_spikes' in globals() and container.name in container_cpu_spikes:
+                        container_cpu_spikes[container.name] = 0
+
+                # 4. VRAM Limit Check
+                if vram_cap_gb is not None:
+                    container_gpu_procs = []
+                    container_vram_mb = 0
+
+                    # Method A: Container-internal query (required for Windows / WSL2)
+                    try:
+                        exec_res = container.exec_run("nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader,nounits")
+                        if exec_res.exit_code == 0:
+                            lines = exec_res.output.decode("utf-8").strip().split("\n")
+                            for line in lines:
+                                if line.strip() and "," in line:
+                                    parts = line.split(",")
+                                    p_pid = int(parts[0].strip())
+                                    try:
+                                        p_vram = float(parts[1].strip())
+                                    except ValueError:
+                                        p_vram = 0.0
+                                    container_vram_mb += p_vram
+                                    container_gpu_procs.append((p_pid, p_vram, "internal"))
+                    except Exception:
+                        pass
+
+                    # Method B: Host NVML mapping fallback (if internal query failed)
+                    if container_vram_mb == 0 and GPU_AVAILABLE and nvml_processes:
+                        for proc in nvml_processes:
+                            if proc.pid in container_pids:
+                                val_mb = proc.usedGpuMemory / (1024**2)
+                                container_vram_mb += val_mb
+                                container_gpu_procs.append((proc.pid, val_mb, "host"))
+
+                    # Method C: Custom telemetry file fallback (required for Windows / WSL2)
+                    if container_vram_mb == 0:
+                        try:
+                            # List all telemetry files in the container
+                            exec_ls = container.exec_run("sh -c 'ls -1 /tmp/gpushare_usage_*.json'")
+                            if exec_ls.exit_code == 0:
+                                lines = exec_ls.output.decode("utf-8").strip().split("\n")
+                                for line in lines:
+                                    line = line.strip()
+                                    if not line or "*" in line:
+                                        continue
+                                    try:
+                                        filename = os.path.basename(line)
+                                        pid_str = filename.replace("gpushare_usage_", "").replace(".json", "")
+                                        c_pid = int(pid_str)
+                                    except ValueError:
+                                        continue
+                                    
+                                    # Check if the process is still running inside the container
+                                    check_alive = container.exec_run(f"kill -0 {c_pid}")
+                                    if check_alive.exit_code == 0:
+                                        exec_cat = container.exec_run(f"cat {line}")
+                                        if exec_cat.exit_code == 0:
+                                            import json
+                                            data = json.loads(exec_cat.output.decode("utf-8").strip())
+                                            val_mb = float(data.get("vram_mb", 0.0))
+                                            container_vram_mb += val_mb
+                                            container_gpu_procs.append((c_pid, val_mb, "internal_telemetry"))
+                                    else:
+                                        # Clean up stale telemetry file
+                                        container.exec_run(f"rm {line}")
+                        except Exception:
+                            pass
+
+                    if container_vram_mb > vram_cap_gb * 1024:
+                        alert_text = (
+                            f"[Limit Guard] 🚨 Renter container '{container.name}' exceeded VRAM limit! "
+                            f"({container_vram_mb:.1f} MB > {vram_cap_gb * 1024:.1f} MB Cap). "
+                            "Terminating the offending GPU-consuming process..."
+                        )
+                        print("\n" + "=" * 60)
+                        print(alert_text)
+                        print("=" * 60 + "\n")
+                        OVERLOAD_ALERTS.append({
+                            "time": time.time(),
+                            "reason": f"VRAM Cap Exceeded on {container.name}",
+                            "message": alert_text
+                        })
+                        
+                        container_gpu_procs.sort(key=lambda x: x[1], reverse=True)
+                        if container_gpu_procs:
+                            pid_to_kill, used_mem, pid_type = container_gpu_procs[0]
+                            if pid_type in ("internal", "internal_telemetry"):
+                                try:
+                                    print(f"[Limit Guard] Terminating internal container PID {pid_to_kill} (VRAM: {used_mem:.1f} MB)")
+                                    container.exec_run(f"kill -9 {pid_to_kill}")
+                                except Exception as e:
+                                    print(f"[Limit Guard] Failed to kill internal PID {pid_to_kill}: {e}")
+                            else:
+                                try:
+                                    print(f"[Limit Guard] Sending SIGKILL to host process PID {pid_to_kill} (VRAM: {used_mem:.1f} MB)")
+                                    os.kill(pid_to_kill, 9)
+                                except Exception as e:
+                                    print(f"[Limit Guard] Failed to kill host PID {pid_to_kill}: {e}")
+
+            # B. HOST-LEVEL HARDWARE OVERLOAD GUARDS
+            # 1. Thermal Check
+            stats = get_gpu_stats()
+            gpu_temp = stats.get("temp_c", 0)
+
+            # 2. Host RAM Check
+            ram_pct = 50
+            try:
+                import psutil
+                ram_pct = psutil.virtual_memory().percent
+            except Exception:
+                pass
+
+            critical_reason = None
+            if gpu_temp >= 88:
+                critical_reason = f"CRITICAL GPU TEMPERATURE ({gpu_temp}°C >= 88°C safety threshold)"
+            elif ram_pct >= 96:
+                consecutive_ram_spikes += 1
+                if consecutive_ram_spikes >= 3:
+                    critical_reason = f"CRITICAL SYSTEM RAM SATURATION ({ram_pct}% host memory used)"
+            else:
+                consecutive_ram_spikes = 0
+
+            if critical_reason:
+                alert_text = f"[Overload Guard] 🚨 {critical_reason}! Auto-stopping worker containers to protect hardware..."
+                print("\n" + "=" * 60)
+                print(alert_text)
+                print("=" * 60 + "\n")
+                OVERLOAD_ALERTS.append({"time": time.time(), "reason": critical_reason, "message": alert_text})
+
+                for c in running_containers:
+                    try:
+                        print(f"[Overload Guard] Halting container: {c.name}...")
+                        c.stop(timeout=5)
+                        c.remove(force=True)
+                    except Exception as ce:
+                        print(f"[Overload Guard] Stop error for {c.name}: {ce}")
+
+                # Terminate active Cloudflare tunnels
+                for t_key in list(active_tunnels.keys()):
+                    try:
+                        active_tunnels[t_key].terminate()
+                        active_tunnels[t_key].kill()
+                        del active_tunnels[t_key]
+                    except Exception:
+                        pass
+
+                consecutive_ram_spikes = 0
+
+        except Exception as watchdog_err:
+            time.sleep(5)
+
+
 def send_heartbeat():
     """Send a heartbeat payload to the backend and handle dispatched/stopped jobs."""
     stats = get_gpu_stats()
     tailscale_ip = get_tailscale_ip()
+    config = get_current_provider_config()
     payload = {
         "machine_id": MACHINE_ID,
         "tailscale_ip": tailscale_ip,
@@ -432,7 +925,7 @@ def send_heartbeat():
         "vram_total_mb": stats["vram_total_mb"],
         "vram_free_mb": stats["vram_free_mb"],
         "cpus": stats["cpus"],
-        "shared_ram_gb": float(PROVIDER_CONFIG.get("shared_ram_gb", 8.0)),
+        "shared_ram_gb": float(config.get("shared_ram_gb", 8.0)),
     }
     try:
         resp = requests.post(BACKEND_URL, json=payload, timeout=5)
@@ -449,9 +942,9 @@ def send_heartbeat():
                 req_vram = float(job.get("vram_gb", 2.0))
 
                 # Clamp to provider max limits
-                cpu_cores = min(req_cpu, PROVIDER_CONFIG.get("shared_cpus", 4))
-                ram_gb = min(req_ram, int(PROVIDER_CONFIG.get("shared_ram_gb", 8.0)))
-                vram_gb = min(req_vram, float(PROVIDER_CONFIG.get("shared_vram_gb", 4.0)))
+                cpu_cores = min(req_cpu, config.get("shared_cpus", 4))
+                ram_gb = min(req_ram, int(config.get("shared_ram_gb", 8.0)))
+                vram_gb = min(req_vram, float(config.get("shared_vram_gb", 4.0)))
 
                 print(f"[Agent] Received new job #{j_id}! (Allocated: {vram_gb:.1f}GB VRAM, {cpu_cores} CPUs, {ram_gb}GB RAM) Starting Jupyter...")
                 threading.Thread(
@@ -665,6 +1158,117 @@ if FLASK_AVAILABLE:
             total_vram_gb = max(0.5, float(hw.get("total_vram_gb", 4.0)))
             vram_fraction = min(1.0, max(0.05, vram_gb / total_vram_gb))
 
+            # Dynamically write sitecustomize.py for VRAM cap enforcement and telemetry inside the container
+            host_mount_dir = os.path.abspath(os.path.join(BASE_DIR, "gpushare_mount"))
+            os.makedirs(host_mount_dir, exist_ok=True)
+            sitecustomize_path = os.path.join(host_mount_dir, "sitecustomize.py")
+            sitecustomize_content = """# sitecustomize.py
+import sys
+import os
+import threading
+import time
+
+# Chain-load any pre-existing sitecustomize.py
+our_dir = os.path.dirname(__file__)
+original_sys_path = list(sys.path)
+if our_dir in sys.path:
+    sys.path.remove(our_dir)
+try:
+    import sitecustomize
+except ImportError:
+    pass
+finally:
+    sys.path = original_sys_path
+
+def configure_gpu_limits():
+    vram_cap_gb_str = os.getenv("GPUSHARE_VRAM_GB")
+    if not vram_cap_gb_str:
+        return
+    try:
+        vram_cap_gb = float(vram_cap_gb_str)
+    except ValueError:
+        return
+
+    def watch_imports():
+        torch_configured = False
+        tf_configured = False
+        limit_bytes = vram_cap_gb * 1024 * 1024 * 1024
+        
+        # Initial telemetry file creation
+        try:
+            with open(f"/tmp/gpushare_usage_{os.getpid()}.json", "w") as f:
+                import json
+                json.dump({
+                    "vram_mb": 0.0,
+                    "pid": os.getpid()
+                }, f)
+        except Exception:
+            pass
+
+        while True:
+            # Monitor PyTorch
+            if 'torch' in sys.modules:
+                try:
+                    import torch
+                    if torch.cuda.is_available():
+                        if not torch_configured:
+                            total_mem = torch.cuda.get_device_properties(0).total_memory
+                            fraction = min(1.0, limit_bytes / total_mem)
+                            torch.cuda.set_per_process_memory_fraction(fraction, 0)
+                            torch_configured = True
+                        
+                        # Active monitoring fallback
+                        allocated = torch.cuda.memory_allocated(0)
+                        if allocated > limit_bytes:
+                            print(f"\\n[Limit Guard] 🚨 Process exceeded GPU VRAM limit! ({allocated / 1024**3:.2f} GB > {vram_cap_gb} GB Cap)", file=sys.stderr)
+                            print("[Limit Guard] Terminating process...", file=sys.stderr)
+                            os._exit(9)
+                except Exception:
+                    pass
+
+            # Monitor TensorFlow
+            if not tf_configured and 'tensorflow' in sys.modules:
+                try:
+                    import tensorflow as tf
+                    gpus = tf.config.list_physical_devices('GPU')
+                    if gpus:
+                        vram_cap_mb = int(vram_cap_gb * 1024)
+                        tf.config.set_logical_device_configuration(
+                            gpus[0],
+                            [tf.config.LogicalDeviceConfiguration(memory_limit=vram_cap_mb)]
+                        )
+                    tf_configured = True
+                except Exception:
+                    pass
+
+            # Write telemetry file to /tmp/gpushare_usage_{pid}.json
+            if 'torch' in sys.modules:
+                try:
+                    import torch
+                    if torch.cuda.is_available():
+                        allocated = torch.cuda.memory_allocated(0)
+                        with open(f"/tmp/gpushare_usage_{os.getpid()}.json", "w") as f:
+                            import json
+                            json.dump({
+                                "vram_mb": allocated / (1024**2),
+                                "pid": os.getpid()
+                            }, f)
+                except Exception:
+                    pass
+
+            time.sleep(0.5)
+
+    t = threading.Thread(target=watch_imports, daemon=True)
+    t.start()
+
+try:
+    configure_gpu_limits()
+except Exception:
+    pass
+"""
+            with open(sitecustomize_path, "w", encoding="utf-8") as f:
+                f.write(sitecustomize_content)
+
             print(f"[Agent] [{job_id}] Launching sandbox pod '{container_name}' on port {host_port} "
                   f"(Caps: {vram_gb:.1f}GB VRAM, {cpu_cores} CPUs, {ram_gb}GB RAM, GPU: {'Yes' if GPU_AVAILABLE else 'No'})...")
 
@@ -705,8 +1309,17 @@ if FLASK_AVAILABLE:
                     "GRANT_SUDO": "no",
                     "CUDA_VISIBLE_DEVICES": "0",
                     "GPUSHARE_VRAM_GB": str(vram_gb),
+                    "GPUSHARE_CPU_CORES": str(cpu_cores),
+                    "GPUSHARE_RAM_GB": str(ram_gb),
                     "OMP_NUM_THREADS": str(cpu_cores),
                     "MKL_NUM_THREADS": str(cpu_cores),
+                    "PYTHONPATH": "/etc/gpushare"
+                },
+                "volumes": {
+                    host_mount_dir: {
+                        "bind": "/etc/gpushare",
+                        "mode": "ro"
+                    }
                 },
                 "security_opt": ["no-new-privileges:true"],
                 "remove": True,
@@ -774,20 +1387,24 @@ if FLASK_AVAILABLE:
         machine_ip = data.get("machine_ip", "127.0.0.1")
         req_cpu = data.get("cpu_cores", 2)
         req_ram = data.get("ram_gb", 8)
+        req_vram = data.get("vram_gb", 2.0)
         job_id = uuid.uuid4().hex[:12]
 
-        cpu_cores = min(req_cpu, PROVIDER_CONFIG.get("shared_cpus", 4))
-        ram_gb = min(req_ram, int(PROVIDER_CONFIG.get("shared_ram_gb", 8.0)))
+        config = get_current_provider_config()
+
+        cpu_cores = min(req_cpu, config.get("shared_cpus", 4))
+        ram_gb = min(req_ram, int(config.get("shared_ram_gb", 8.0)))
+        vram_gb = min(req_vram, float(config.get("shared_vram_gb", 4.0)))
 
         job_store[job_id] = {"status": "pending"}
         t = threading.Thread(
             target=_launch_jupyter_bg,
-            args=(job_id, token, machine_ip, cpu_cores, ram_gb),
+            args=(job_id, token, machine_ip, cpu_cores, ram_gb, vram_gb),
             daemon=True
         )
         t.start()
 
-        print(f"[Agent] Job {job_id} queued (CPU:{cpu_cores}, RAM:{ram_gb}GB) for token {token[:8]}...")
+        print(f"[Agent] Job {job_id} queued (VRAM:{vram_gb}GB, CPU:{cpu_cores}, RAM:{ram_gb}GB) for token {token[:8]}...")
         return jsonify({"status": "pending", "job_id": job_id}), 202
 
     @flask_app.route("/job-status/<job_id>", methods=["GET"])
@@ -808,6 +1425,14 @@ if FLASK_AVAILABLE:
         stats = get_gpu_stats()
         hw = get_system_hardware()
 
+        # Get container-level telemetry
+        containers_telemetry = get_container_metrics()
+
+        # Sum of client consumption
+        client_used_vram_mb = sum(c.get("vram_mb", 0) for c in containers_telemetry.values())
+        client_used_cores = sum(c.get("cpu_cores", 0) for c in containers_telemetry.values())
+        client_used_gb = sum(c.get("ram_gb", 0) for c in containers_telemetry.values())
+
         gpu_telemetry = {
             "model": hw.get("gpu_name", "NVIDIA Graphics Processor"),
             "total_vram_mb": round(hw.get("total_vram_gb", 4.0) * 1024),
@@ -815,7 +1440,8 @@ if FLASK_AVAILABLE:
             "free_vram_mb": stats.get("vram_free_mb", 4096),
             "gpu_util_pct": stats.get("gpu_util_pct", 0),
             "temp_c": stats.get("temp_c", 45),
-            "has_nvidia": GPU_AVAILABLE
+            "has_nvidia": GPU_AVAILABLE,
+            "client_used_vram_mb": client_used_vram_mb
         }
 
         # CPU and System RAM live measurements
@@ -863,25 +1489,29 @@ if FLASK_AVAILABLE:
             "cores": total_cpus,
             "physicalCores": total_cpus,
             "brand": hw.get("cpu_brand", "AMD Ryzen 5 4600H (12 Cores)"),
-            "loadPct": cpu_load_pct
+            "loadPct": cpu_load_pct,
+            "client_used_cores": client_used_cores
         }
 
         ram_telemetry = {
             "totalGb": total_ram_gb,
             "usedGb": used_ram_gb,
             "freeGb": max(0.1, round(total_ram_gb - used_ram_gb, 1)),
-            "usedPct": ram_used_pct
+            "usedPct": ram_used_pct,
+            "client_used_gb": client_used_gb
         }
 
         return jsonify({
             "status": "ok",
             "machine_id": MACHINE_ID,
-            "provider_config": PROVIDER_CONFIG,
+            "provider_config": get_current_provider_config(),
             "active_containers": active,
             "active_jobs": len(active),
             "gpu": gpu_telemetry,
             "cpu": cpu_telemetry,
             "ram": ram_telemetry,
+            "active_containers_telemetry": containers_telemetry,
+            "overload_alerts": OVERLOAD_ALERTS[-5:],
         }), 200
 
     @flask_app.route("/container-logs", methods=["GET"])
@@ -986,6 +1616,9 @@ if FLASK_AVAILABLE:
 if __name__ == "__main__":
     # Pre-fetch Docker image in background
     threading.Thread(target=prefetch_image, daemon=True).start()
+
+    # Start hardware overload & thermal watchdog in background thread
+    threading.Thread(target=overload_watchdog_loop, daemon=True).start()
 
     # Start heartbeat in background thread
     hb_thread = threading.Thread(target=heartbeat_loop, daemon=True)
