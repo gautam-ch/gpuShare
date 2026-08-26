@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 
-export default function ActiveJobsTable({ activeContainers = [], clusterJobs = [], gpu = {}, onRefresh }) {
+export default function ActiveJobsTable({ activeContainers = [], clusterJobs = [], gpu = {}, activeContainersTelemetry = {}, onRefresh }) {
   const [terminating, setTerminating] = useState({})
   const hasWorkloads = activeContainers.length > 0 || clusterJobs.filter(j => j.status === 'done' || j.status === 'pending').length > 0
 
@@ -94,7 +94,12 @@ export default function ActiveJobsTable({ activeContainers = [], clusterJobs = [
                 const tokenPrefix = containerName.replace('jupyter-', '')
                 const matchingJob = clusterJobs.find(j => j.token && j.token.startsWith(tokenPrefix))
 
-                const allocatedVramMb = gpu?.used_vram_mb || 630
+                const containerTelemetry = activeContainersTelemetry[containerName] || {}
+                const liveVramMb = containerTelemetry.vram_mb !== undefined ? containerTelemetry.vram_mb : null
+                const liveCpuCores = containerTelemetry.cpu_cores !== undefined ? containerTelemetry.cpu_cores : null
+                const liveRamGb = containerTelemetry.ram_gb !== undefined ? containerTelemetry.ram_gb : null
+
+                const allocatedVramMb = liveVramMb !== null ? liveVramMb : (gpu?.used_vram_mb || 630)
                 const vramCapGb = matchingJob?.vram_required_mb ? (matchingJob.vram_required_mb / 1024).toFixed(1) : '2.0'
                 const cpuCores = matchingJob?.cpu_cores || 4
                 const ramGb = matchingJob?.ram_gb || 8
@@ -124,15 +129,15 @@ export default function ActiveJobsTable({ activeContainers = [], clusterJobs = [
                         {allocatedVramMb >= 1024 ? `${(allocatedVramMb / 1024).toFixed(2)} GB` : `${Math.round(allocatedVramMb)} MB`} VRAM
                       </div>
                       <div className="text-[11px] text-gray-500 font-mono">
-                        PyTorch Matrix Compute Active
+                        {liveVramMb !== null ? "Live VRAM Consumption" : "PyTorch Matrix Compute Active"}
                       </div>
                     </td>
                     <td className="py-3.5 px-4 text-gray-700 font-mono">
                       <div className="font-semibold text-gray-900">
-                        {vramCapGb} GB VRAM Cap • {cpuCores} Cores
+                        {vramCapGb} GB VRAM Cap • {cpuCores} Cores {liveCpuCores !== null && <span className="text-orange-600 font-bold">({liveCpuCores.toFixed(1)} Cores Live)</span>}
                       </div>
                       <div className="text-[11px] text-gray-500">
-                        {ramGb} GB RAM (cgroups v2 limit)
+                        {ramGb} GB RAM Cap {liveRamGb !== null && <span className="text-blue-600 font-bold">({liveRamGb.toFixed(1)} GB Live)</span>}
                       </div>
                     </td>
                     <td className="py-3.5 px-4 text-gray-600 font-mono text-[11px]">

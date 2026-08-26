@@ -1,5 +1,5 @@
 {
-  "shared_vram_gb": 1,
+  "shared_vram_gb": 2,
   "shared_cpus": 2,
   "shared_ram_gb": 4
 }

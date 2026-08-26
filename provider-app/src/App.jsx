@@ -144,7 +144,10 @@ export default function App() {
           if (data.ram) {
             setTelemetry(prev => ({ ...prev, ram: data.ram }))
           }
-          if (data.provider_config && !providerConfig) {
+          if (data.active_containers_telemetry) {
+            setTelemetry(prev => ({ ...prev, active_containers_telemetry: data.active_containers_telemetry }))
+          }
+          if (data.provider_config) {
             setProviderConfig(data.provider_config)
           }
           if (Array.isArray(data.active_containers)) {
@@ -158,6 +161,12 @@ export default function App() {
             if (ag.data.gpu) setTelemetry(prev => ({ ...prev, gpu: ag.data.gpu }))
             if (ag.data.cpu) setTelemetry(prev => ({ ...prev, cpu: ag.data.cpu }))
             if (ag.data.ram) setTelemetry(prev => ({ ...prev, ram: ag.data.ram }))
+            if (ag.data.active_containers_telemetry) {
+              setTelemetry(prev => ({ ...prev, active_containers_telemetry: ag.data.active_containers_telemetry }))
+            }
+            if (ag.data.provider_config) {
+              setProviderConfig(ag.data.provider_config)
+            }
             if (Array.isArray(ag.data.active_containers)) {
               foundContainers.push(...ag.data.active_containers)
             }
@@ -192,21 +201,25 @@ export default function App() {
 
       // 3. Central Cluster Node & Job Status
       try {
-        const [mRes, jRes] = await Promise.all([
-          fetch('/cluster-api/machines').catch(() => fetch('http://localhost:8000/machines')).catch(() => null),
-          fetch('/cluster-api/admin/jobs').catch(() => fetch('http://localhost:8000/admin/jobs')).catch(() => null)
-        ])
-        if (mRes && mRes.ok) {
-          const machines = await mRes.json()
-          const myNode = machines.find((m) => m.id === currentMachineId) || machines[machines.length - 1]
-          let jobs = []
-          if (jRes && jRes.ok) {
-            try { jobs = await jRes.json() } catch {}
-          }
-          setClusterInfo({ connected: true, machine: myNode, activeJobs: jobs })
-        } else if (window.providerAPI?.getClusterStatus) {
+        if (window.providerAPI?.getClusterStatus) {
           const cl = await window.providerAPI.getClusterStatus(currentMachineId)
-          if (cl) setClusterInfo(cl)
+          if (cl && cl.connected) {
+            setClusterInfo(cl)
+          }
+        } else {
+          const [mRes, jRes] = await Promise.all([
+            fetch('/cluster-api/machines').catch(() => null),
+            fetch('/cluster-api/admin/jobs').catch(() => null)
+          ])
+          if (mRes && mRes.ok) {
+            const machines = await mRes.json()
+            const myNode = machines.find((m) => m.id === currentMachineId) || machines[machines.length - 1]
+            let jobs = []
+            if (jRes && jRes.ok) {
+              try { jobs = await jRes.json() } catch {}
+            }
+            setClusterInfo({ connected: true, machine: myNode, activeJobs: jobs })
+          }
         }
       } catch (clErr) {
         console.warn('Cluster status fetch error:', clErr)
@@ -284,6 +297,21 @@ export default function App() {
           </div>
         </div>
 
+        {/* Overload Alert Warning (if triggered by Watchdog) */}
+        {agentStatus?.data?.overload_alerts?.length > 0 && (
+          <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-center justify-between text-xs text-red-800">
+            <div className="flex items-center gap-2">
+              <span className="text-base">🚨</span>
+              <div>
+                <strong>Hardware Overload Guard Activated:</strong> {agentStatus.data.overload_alerts[agentStatus.data.overload_alerts.length - 1].reason}. Containers were automatically halted and reclaimed to protect your system.
+              </div>
+            </div>
+            <span className="font-mono text-[10px] text-red-600 bg-white px-2 py-0.5 rounded border border-red-200 font-bold shrink-0">
+              Host Protected
+            </span>
+          </div>
+        )}
+
         {/* Hardware Status Row */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <GpuUsageCard
@@ -296,6 +324,7 @@ export default function App() {
             cpu={telemetry.cpu}
             ram={telemetry.ram}
             providerConfig={activeConfig}
+            activeContainers={activeContainers}
             clusterJobs={clusterInfo.activeJobs}
           />
         </div>
@@ -305,6 +334,7 @@ export default function App() {
           activeContainers={activeContainers}
           clusterJobs={clusterInfo.activeJobs}
           gpu={telemetry.gpu}
+          activeContainersTelemetry={telemetry.active_containers_telemetry || {}}
           onRefresh={fetchAllData}
         />
 

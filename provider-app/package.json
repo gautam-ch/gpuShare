@@ -3,7 +3,11 @@
   "version": "1.0.0",
   "description": "Desktop provider telemetry & hardware control panel for GPU Share Hub",
   "main": "electron/main.js",
-  "author": "GPU Share Hub",
+  "author": {
+    "name": "GPU Share Hub",
+    "email": "contact@gpusharehub.com"
+  },
+  "homepage": "https://gpusharehub.com",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -56,7 +60,11 @@
     "linux": {
       "target": [
         {
-          "target": "AppImage",
+          "target": "tar.gz",
+          "arch": ["x64"]
+        },
+        {
+          "target": "zip",
           "arch": ["x64"]
         }
       ],

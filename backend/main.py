@@ -386,6 +386,7 @@ async def admin_jobs(db: Session = Depends(get_db)):
             "id": j.id,
             "machine_id": j.machine_id,
             "status": j.status,
+            "token": j.token,
             "vram_required_mb": j.vram_required,
             "cpu_cores": j.cpu_cores,
             "ram_gb": j.ram_gb,

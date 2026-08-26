@@ -1,20 +1,25 @@
 import React from 'react'
 
-export default function CpuRamUsageCard({ cpu, ram, providerConfig, clusterJobs = [] }) {
+export default function CpuRamUsageCard({ cpu, ram, providerConfig, activeContainers = [], clusterJobs = [] }) {
   const totalPhysicalCpus = cpu?.cores || 4
   const sharedCpus = providerConfig?.shared_cpus || 0
 
   const totalPhysicalRamGb = ram?.totalGb || 16.0
   const sharedRamGb = providerConfig?.shared_ram_gb || 0
 
-  // Active jobs = renter sessions that are running (status "done" means Jupyter is live)
+  const activeCount = activeContainers.length
+
+  // Active renter jobs — "done" = Jupyter is live and consuming resources
   const activeJobs = clusterJobs.filter(
     j => j.status === 'done' || j.status === 'assigned' || j.status === 'pending'
   )
 
-  // Sum up what the client(s) have reserved from this provider
-  const clientCpuCores = activeJobs.reduce((sum, j) => sum + (j.cpu_cores || 0), 0)
-  const clientRamGb = activeJobs.reduce((sum, j) => sum + (j.ram_gb || 0), 0)
+  // If no containers are actively running on host, client usage is strictly 0
+  const rawCpu = activeJobs.reduce((sum, j) => sum + (j.cpu_cores || 0), 0)
+  const rawRam = activeJobs.reduce((sum, j) => sum + (j.ram_gb || 0), 0)
+
+  const clientCpuCores = activeCount === 0 ? 0 : (cpu?.client_used_cores !== undefined ? cpu.client_used_cores : (rawCpu > 0 ? Math.min(sharedCpus, rawCpu) : Math.min(sharedCpus, activeCount * 2)))
+  const clientRamGb = activeCount === 0 ? 0 : (ram?.client_used_gb !== undefined ? ram.client_used_gb : (rawRam > 0 ? Math.min(sharedRamGb, rawRam) : Math.min(sharedRamGb, activeCount * 4)))
 
   // Percentages relative to what was shared (not total physical)
   const clientCpuPct = sharedCpus > 0 ? Math.min(100, (clientCpuCores / sharedCpus) * 100) : 0
@@ -24,7 +29,7 @@ export default function CpuRamUsageCard({ cpu, ram, providerConfig, clusterJobs 
   const allocatedCpuPct = totalPhysicalCpus > 0 ? Math.min(100, (sharedCpus / totalPhysicalCpus) * 100) : 0
   const allocatedRamPct = totalPhysicalRamGb > 0 ? Math.min(100, (sharedRamGb / totalPhysicalRamGb) * 100) : 0
 
-  const hasActiveRenters = activeJobs.length > 0
+  const hasActiveRenters = activeCount > 0
 
   return (
     <div className="bg-white border border-gray-200 rounded-lg p-5 shadow-xs flex flex-col justify-between">
@@ -51,7 +56,13 @@ export default function CpuRamUsageCard({ cpu, ram, providerConfig, clusterJobs 
 
         {/* ── CPU Section ── */}
         <div className="mt-4 space-y-3">
-          <div className="text-[11px] uppercase font-bold tracking-wider text-gray-400">CPU Cores</div>
+          <div className="flex items-center justify-between">
+            <div className="text-[11px] uppercase font-bold tracking-wider text-gray-400">CPU Cores</div>
+            <div className="flex items-center gap-1.5 font-mono text-[10px] text-green-700 bg-green-50 px-2 py-0.5 rounded border border-green-200">
+              <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+              <span>Live Host Load: <strong>{cpu?.loadPct ?? 0}%</strong></span>
+            </div>
+          </div>
 
           {/* Allocated Cap Bar */}
           <div className="space-y-1">
@@ -104,7 +115,13 @@ export default function CpuRamUsageCard({ cpu, ram, providerConfig, clusterJobs 
 
         {/* ── RAM Section ── */}
         <div className="mt-5 space-y-3">
-          <div className="text-[11px] uppercase font-bold tracking-wider text-gray-400">System RAM</div>
+          <div className="flex items-center justify-between">
+            <div className="text-[11px] uppercase font-bold tracking-wider text-gray-400">System RAM</div>
+            <div className="flex items-center gap-1.5 font-mono text-[10px] text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+              <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
+              <span>Live Host Used: <strong>{ram?.usedGb?.toFixed(1) ?? '0.0'} / {totalPhysicalRamGb.toFixed(1)} GB</strong> ({ram?.usedPct ?? 0}%)</span>
+            </div>
+          </div>
 
           {/* Allocated Cap Bar */}
           <div className="space-y-1">
