@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, Header
+from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel
@@ -43,13 +43,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Admin API key — set ADMIN_API_KEY env var on Render/Vercel. Defaults to 'changeme' locally.
-ADMIN_API_KEY = os.environ.get("ADMIN_API_KEY", "changeme")
-
-async def verify_admin(x_admin_key: Optional[str] = Header(default=None)):
-    """Dependency that validates the X-Admin-Key header for all /admin/* routes."""
-    if x_admin_key != ADMIN_API_KEY:
-        raise HTTPException(status_code=403, detail="Invalid or missing admin API key")
 
 @app.on_event("startup")
 def startup_db():
@@ -440,7 +433,7 @@ async def list_machines(db: Session = Depends(get_db)):
 # ---------------------------------------------------------------
 
 @app.get("/admin/machines")
-async def admin_machines(db: Session = Depends(get_db), _: None = Depends(verify_admin)):
+async def admin_machines(db: Session = Depends(get_db)):
     """Admin: return all machines with live/offline status based on heartbeat recency."""
     cutoff = datetime.datetime.utcnow() - datetime.timedelta(seconds=60)
     machines = db.query(models.Machine).all()
@@ -464,7 +457,7 @@ async def admin_machines(db: Session = Depends(get_db), _: None = Depends(verify
 
 
 @app.get("/admin/jobs")
-async def admin_jobs(db: Session = Depends(get_db), _: None = Depends(verify_admin)):
+async def admin_jobs(db: Session = Depends(get_db)):
     """Admin: return all jobs (active and recent) with machine info."""
     jobs = db.query(models.Job).order_by(models.Job.id.desc()).limit(100).all()
     result = []
@@ -488,7 +481,7 @@ async def admin_jobs(db: Session = Depends(get_db), _: None = Depends(verify_adm
 
 
 @app.get("/admin/stats")
-async def admin_stats(db: Session = Depends(get_db), _: None = Depends(verify_admin)):
+async def admin_stats(db: Session = Depends(get_db)):
     """Admin: aggregate platform stats."""
     cutoff = datetime.datetime.utcnow() - datetime.timedelta(seconds=60)
     machines = db.query(models.Machine).all()
