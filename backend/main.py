@@ -41,6 +41,7 @@ app.add_middleware(
     allow_origins=_ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_credentials=False,
 )
 
 
@@ -200,7 +201,7 @@ async def stop_session(req: StopSessionRequest, db: Session = Depends(get_db)):
     if not job and req.job_id:
         job = query.filter(models.Job.id == req.job_id).first()
     if not job:
-        job = query.filter(models.Job.status.in_(["assigned", "done", "pending"])).order_by(models.Job.id.desc()).first()
+        job = query.filter(models.Job.status.in_(["assigned", "running", "done", "pending"])).order_by(models.Job.id.desc()).first()
 
     if not job:
         return {"status": "no_active_session", "message": "No active session found"}

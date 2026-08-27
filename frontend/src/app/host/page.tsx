@@ -103,6 +103,96 @@ export default function HostPage() {
           </p>
         </div>
 
+        {/* Desktop App Download Section */}
+        <div className="bg-white border border-gray-200/80 rounded-xl p-5 shadow-xs space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="font-bold text-gray-900 text-sm flex items-center gap-2">
+              <svg className="w-4 h-4 text-[#bb432c]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="3" width="18" height="13" rx="2"/>
+                <path d="M8 21h8M12 17v4"/>
+              </svg>
+              <span>Download Desktop App</span>
+              <span className="text-[10px] font-semibold uppercase px-2 py-0.5 bg-[#bb432c]/10 text-[#bb432c] rounded border border-[#bb432c]/20">
+                Recommended
+              </span>
+            </h3>
+          </div>
+          <p className="text-xs text-gray-600 leading-relaxed">
+            Install the Kinetic provider desktop app — the easiest way to host a GPU node. Includes a one-click setup wizard, live resource monitor, and automatic agent management.
+          </p>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {/* Windows */}
+            <a
+              href="https://drive.google.com/file/d/1Lm58bGD4Euz5VulEwioyFniSdI5r6xSs/view?usp=sharing"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-3 p-3.5 rounded-xl border border-gray-200 hover:border-[#bb432c]/40 hover:bg-[#bb432c]/5 transition-all group"
+            >
+              <div className="w-9 h-9 rounded-lg bg-[#0078d4]/10 flex items-center justify-center shrink-0 group-hover:bg-[#bb432c] transition-colors">
+                <svg className="w-5 h-5 text-[#0078d4] group-hover:text-white transition-colors" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M3 3h8v8H3zm10 0h8v8h-8zM3 13h8v8H3zm10 0h8v8h-8z"/>
+                </svg>
+              </div>
+              <div className="min-w-0">
+                <div className="text-xs font-bold text-gray-900 group-hover:text-[#bb432c] flex items-center gap-1 transition-colors">
+                  Windows
+                  <svg className="w-2.5 h-2.5 opacity-60" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3"/></svg>
+                </div>
+                <p className="text-[11px] text-gray-400 truncate">.exe installer</p>
+              </div>
+            </a>
+
+            {/* Linux tar */}
+            <a
+              href="https://drive.google.com/file/d/1RIUB2P9mk2h6YIBc0E11DfKcPMsGbSi-/view?usp=sharing"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-3 p-3.5 rounded-xl border border-gray-200 hover:border-[#bb432c]/40 hover:bg-[#bb432c]/5 transition-all group"
+            >
+              <div className="w-9 h-9 rounded-lg bg-orange-500/10 flex items-center justify-center shrink-0 group-hover:bg-[#bb432c] transition-colors">
+                <svg className="w-5 h-5 text-orange-500 group-hover:text-white transition-colors" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/>
+                  <path d="M12 2a15.3 15.3 0 010 20M12 2a15.3 15.3 0 000 20"/>
+                </svg>
+              </div>
+              <div className="min-w-0">
+                <div className="text-xs font-bold text-gray-900 group-hover:text-[#bb432c] flex items-center gap-1 transition-colors">
+                  Linux
+                  <svg className="w-2.5 h-2.5 opacity-60" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3"/></svg>
+                </div>
+                <p className="text-[11px] text-gray-400 truncate">.tar.gz package</p>
+              </div>
+            </a>
+
+            {/* Linux zip */}
+            <a
+              href="https://drive.google.com/file/d/12skkWuN_4sb1yPawRHdBI1ktyDA7rBj_/view?usp=sharing"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-3 p-3.5 rounded-xl border border-gray-200 hover:border-[#bb432c]/40 hover:bg-[#bb432c]/5 transition-all group"
+            >
+              <div className="w-9 h-9 rounded-lg bg-orange-500/10 flex items-center justify-center shrink-0 group-hover:bg-[#bb432c] transition-colors">
+                <svg className="w-5 h-5 text-orange-500 group-hover:text-white transition-colors" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/>
+                  <path d="M12 2a15.3 15.3 0 010 20M12 2a15.3 15.3 0 000 20"/>
+                </svg>
+              </div>
+              <div className="min-w-0">
+                <div className="text-xs font-bold text-gray-900 group-hover:text-[#bb432c] flex items-center gap-1 transition-colors">
+                  Linux
+                  <svg className="w-2.5 h-2.5 opacity-60" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3"/></svg>
+                </div>
+                <p className="text-[11px] text-gray-400 truncate">.zip package</p>
+              </div>
+            </a>
+          </div>
+
+          <p className="text-[11px] text-gray-400 italic">
+            Or use the one-line terminal command below to set up manually without the desktop app.
+          </p>
+        </div>
+
         {/* Windows Prerequisites Card */}
         <div className="bg-white border border-gray-200/80 rounded-xl p-5 shadow-xs space-y-3">
           <div className="flex items-center justify-between">
