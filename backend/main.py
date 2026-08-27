@@ -161,13 +161,18 @@ async def stop_session(req: StopSessionRequest, db: Session = Depends(get_db)):
 
     job.status = "stopping"
 
-    # Restore VRAM back to machine's free capacity
+    # Restore VRAM, CPU, and RAM back to machine's free capacity
     machine = db.query(models.Machine).filter(models.Machine.id == job.machine_id).first()
-    if machine and job.vram_required:
-        machine.vram_free_mb = min(
-            machine.vram_total_mb or 4096.0,
-            (machine.vram_free_mb or 0.0) + job.vram_required
-        )
+    if machine:
+        if job.vram_required:
+            machine.vram_free_mb = min(
+                machine.vram_total_mb or 4096.0,
+                (machine.vram_free_mb or 0.0) + job.vram_required
+            )
+        if job.cpu_cores:
+            machine.cpus = (machine.cpus or 0) + job.cpu_cores
+        if job.ram_gb:
+            machine.shared_ram_gb = (machine.shared_ram_gb or 0.0) + job.ram_gb
 
     db.commit()
 
@@ -195,10 +200,8 @@ class StartJupyterRequest(BaseModel):
 
 @app.post("/rent")
 async def rent_gpu(req: RentRequest, db: Session = Depends(get_db)):
-    """Match a machine by VRAM and CPU cores, create a job, return a one-time token and Jupyter URL."""
+    """Match a machine by VRAM, CPU cores, and RAM, create a job, return a one-time token and Jupyter URL."""
     vram_mb = req.vram_required * 1024  # convert GB to MB
-    # Practical VRAM tolerance: Windows display uses ~300MB VRAM, so a 4GB card has ~3780MB free
-    vram_match_threshold = max(vram_mb - 512, vram_mb * 0.85)
 
     # Allow 120s heartbeat window for stability
     cutoff = datetime.datetime.utcnow() - datetime.timedelta(seconds=120)
@@ -213,42 +216,31 @@ async def rent_gpu(req: RentRequest, db: Session = Depends(get_db)):
             detail="No GPU provider machines are currently online. Please ensure your host agent is running."
         )
 
-    max_vram_avail = max((m.vram_total_mb or m.vram_free_mb or 0) for m in online_machines) / 1024
-    max_cpus_avail = max((m.cpus or 4) for m in online_machines)
+    # Find best matching machine with sufficient FREE shared capacity
+    # 5% tolerance for small display overhead
+    vram_tolerance = vram_mb * 0.95
+    matching_machines = [
+        m for m in online_machines
+        if (m.vram_free_mb or 0) >= vram_tolerance
+        and (m.cpus or 0) >= req.cpu_cores
+        and (m.shared_ram_gb or 0) >= req.ram_gb
+    ]
 
-    # Find best matching machine
-    machine = db.query(models.Machine).filter(
-        models.Machine.status == "online",
-        models.Machine.last_heartbeat >= cutoff,
-        models.Machine.vram_free_mb >= vram_match_threshold,
-    ).first()
-
-    # If strict free VRAM wasn't enough (e.g. from previous tests), match by total VRAM
-    if not machine:
-        machine = db.query(models.Machine).filter(
-            models.Machine.status == "online",
-            models.Machine.last_heartbeat >= cutoff,
-            models.Machine.vram_total_mb >= vram_match_threshold,
-        ).first()
-
-    if not machine:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Requested {req.vram_required:.1f} GB VRAM & {req.cpu_cores} CPUs, but online machines have max {max_vram_avail:.1f} GB VRAM & {max_cpus_avail} CPUs. Try selecting {max_vram_avail:.1f} GB or less."
-        )
-
-    # Validate CPU and RAM against provider's sharing limits
-    if req.cpu_cores > (machine.cpus or 999):
+    if not matching_machines:
+        max_free_vram = max((m.vram_free_mb or 0) for m in online_machines) / 1024.0
+        max_free_cpus = max((m.cpus or 0) for m in online_machines)
+        max_free_ram = max((m.shared_ram_gb or 0) for m in online_machines)
         raise HTTPException(
             status_code=400,
-            detail=f"Requested {req.cpu_cores} CPU cores exceeds provider's sharing limit of {machine.cpus} cores."
-        )
-    if req.ram_gb > (machine.shared_ram_gb or 999):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Requested {req.ram_gb} GB RAM exceeds provider's sharing limit of {machine.shared_ram_gb} GB."
+            detail=(
+                f"Cannot allocate pod: Host shared capacity is fully in use! "
+                f"Requested: {req.vram_required:.1f} GB VRAM, {req.cpu_cores} CPUs, {req.ram_gb} GB RAM. "
+                f"Available in shared pool: {max_free_vram:.1f} GB VRAM, {max_free_cpus} CPUs, {max_free_ram:.1f} GB RAM. "
+                "Please wait for active pods to finish or increase your shared limits in the Provider Dashboard."
+            )
         )
 
+    machine = matching_machines[0]
     access_token = uuid.uuid4().hex
 
     # Create a job record with resource caps
@@ -262,8 +254,12 @@ async def rent_gpu(req: RentRequest, db: Session = Depends(get_db)):
         token=access_token
     )
     db.add(new_job)
-    if machine.vram_free_mb:
-        machine.vram_free_mb = max(0.0, machine.vram_free_mb - vram_mb)
+
+    # Immediately deduct from machine's free capacity to prevent race conditions
+    machine.vram_free_mb = max(0.0, (machine.vram_free_mb or 0.0) - vram_mb)
+    machine.cpus = max(0, (machine.cpus or 0) - req.cpu_cores)
+    machine.shared_ram_gb = max(0.0, (machine.shared_ram_gb or 0.0) - req.ram_gb)
+
     db.commit()
     db.refresh(new_job)
 

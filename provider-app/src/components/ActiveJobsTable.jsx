@@ -9,22 +9,40 @@ export default function ActiveJobsTable({ activeContainers = [], clusterJobs = [
       return
     }
     setTerminating(prev => ({ ...prev, [containerName]: true }))
+    const tokenPrefix = containerName.replace('jupyter-', '').slice(0, 8)
+
     try {
-      await fetch('/agent-api/stop-container', {
+      const payload = JSON.stringify({ container_name: containerName })
+      const postOpts = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ container_name: containerName })
-      }).catch(() => fetch('http://localhost:9000/stop-container', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ container_name: containerName })
-      }))
+        body: payload
+      }
+
+      // Send to local agent (via multiple routes for absolute reliability)
+      await Promise.allSettled([
+        fetch('/agent-api/stop-container', postOpts),
+        fetch('http://127.0.0.1:9000/stop-container', postOpts),
+        fetch('http://localhost:9000/stop-container', postOpts),
+        // Also inform cluster backend so job record updates immediately
+        fetch('/cluster-api/stop-session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: tokenPrefix })
+        }),
+        fetch('http://127.0.0.1:8000/stop-session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: tokenPrefix })
+        })
+      ])
+    } catch (err) {
+      console.warn('Error stopping pod:', err)
+    } finally {
       setTimeout(() => {
         setTerminating(prev => ({ ...prev, [containerName]: false }))
         onRefresh?.()
-      }, 1000)
-    } catch {
-      setTerminating(prev => ({ ...prev, [containerName]: false }))
+      }, 500)
     }
   }
 
@@ -48,7 +66,7 @@ export default function ActiveJobsTable({ activeContainers = [], clusterJobs = [
             </span>
           </div>
           <p className="text-xs text-gray-500 mt-0.5">
-            Docker containers executing isolated CUDA kernels and Jupyter workloads on your host
+            Live VRAM · RAM · CPU per pod — updates every 2s · drops to 0 when kernel is killed
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -73,96 +91,157 @@ export default function ActiveJobsTable({ activeContainers = [], clusterJobs = [
           </div>
           <p className="text-sm font-bold text-gray-800">No renter workloads currently executing</p>
           <p className="text-xs text-gray-500 max-w-md mx-auto">
-            Your worker node is standing by in the cluster. When a customer rents and launches a notebook, container resource telemetry will stream here in real time.
+            Your worker node is standing by. When a customer rents and launches a notebook, live resource telemetry will stream here.
           </p>
         </div>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs border-collapse">
-            <thead>
-              <tr className="border-b border-gray-200 bg-gray-50/70 text-gray-600 uppercase tracking-wider font-semibold text-[11px]">
-                <th className="py-3 px-4">Container Pod & Runtime</th>
-                <th className="py-3 px-4">Workload Status</th>
-                <th className="py-3 px-4">CUDA Activity</th>
-                <th className="py-3 px-4">Hardware Isolation</th>
-                <th className="py-3 px-4">Network & Tunnel</th>
-                <th className="py-3 px-4 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100 bg-white">
-              {activeContainers.map((containerName) => {
-                const tokenPrefix = containerName.replace('jupyter-', '')
-                const matchingJob = clusterJobs.find(j => j.token && j.token.startsWith(tokenPrefix))
+        <div className="divide-y divide-gray-100">
+          {activeContainers.map((containerName) => {
+            const tokenPrefix = containerName.replace('jupyter-', '')
+            const matchingJob = clusterJobs.find(j => j.token && j.token.startsWith(tokenPrefix))
+            const isStopping = terminating[containerName]
 
-                const containerTelemetry = activeContainersTelemetry[containerName] || {}
-                const liveVramMb = containerTelemetry.vram_mb !== undefined ? containerTelemetry.vram_mb : null
-                const liveCpuCores = containerTelemetry.cpu_cores !== undefined ? containerTelemetry.cpu_cores : null
-                const liveRamGb = containerTelemetry.ram_gb !== undefined ? containerTelemetry.ram_gb : null
+            // Live usage from nvidia-smi / docker stats — resets to 0 when kernel killed
+            const tel = activeContainersTelemetry[containerName] || {}
+            const liveVramMb   = typeof tel.vram_mb    === 'number' ? tel.vram_mb    : 0
+            const liveCpuCores = typeof tel.cpu_cores  === 'number' ? tel.cpu_cores  : 0
+            const liveRamGb    = typeof tel.ram_gb     === 'number' ? tel.ram_gb     : 0
+            const hasLiveData  = Object.keys(tel).length > 0
 
-                const allocatedVramMb = liveVramMb !== null ? liveVramMb : (gpu?.used_vram_mb || 630)
-                const vramCapGb = matchingJob?.vram_required_mb ? (matchingJob.vram_required_mb / 1024).toFixed(1) : '2.0'
-                const cpuCores = matchingJob?.cpu_cores || 4
-                const ramGb = matchingJob?.ram_gb || 8
-                const isStopping = terminating[containerName]
+            // Static allocation caps — what was reserved, never inflates after kernel kill
+            const capVramGb   = matchingJob?.vram_gb   ?? (matchingJob?.vram_required_mb ? matchingJob.vram_required_mb / 1024 : 2.0)
+            const capCpuCores = matchingJob?.cpu_cores ?? 4
+            const capRamGb    = matchingJob?.ram_gb    ?? 8
+            const capVramMb   = capVramGb * 1024
 
-                return (
-                  <tr key={containerName} className="hover:bg-orange-50/30 transition-colors">
-                    <td className="py-3.5 px-4 font-mono">
-                      <div className="font-bold text-gray-900 flex items-center gap-2">
-                        <span>{containerName}</span>
-                        <span className="px-1.5 py-0.2 bg-gray-100 text-gray-700 text-[10px] rounded font-mono">
-                          PyTorch 2.x
-                        </span>
+            const vramPct = capVramMb   > 0 ? Math.min(100, (liveVramMb   / capVramMb)   * 100) : 0
+            const ramPct  = capRamGb    > 0 ? Math.min(100, (liveRamGb    / capRamGb)    * 100) : 0
+            const cpuPct  = capCpuCores > 0 ? Math.min(100, (liveCpuCores / capCpuCores) * 100) : 0
+
+            const vramColor = vramPct > 90 ? 'bg-red-500' : vramPct > 70 ? 'bg-orange-600' : 'bg-[#F37626]'
+            const ramColor  = ramPct  > 90 ? 'bg-red-500' : 'bg-blue-500'
+            const cpuColor  = cpuPct  > 90 ? 'bg-red-500' : cpuPct > 70 ? 'bg-green-600' : 'bg-green-500'
+
+            return (
+              <div key={containerName} className="p-5 hover:bg-gray-50/50 transition-colors">
+                {/* Pod header */}
+                <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="relative shrink-0">
+                      <div className="w-9 h-9 rounded-full bg-orange-100 border border-orange-200 flex items-center justify-center">
+                        <span className="text-orange-600 text-[10px] font-bold font-mono">GPU</span>
                       </div>
-                      <div className="text-[11px] text-gray-500 mt-0.5">
-                        Image: quay.io/jupyter/pytorch-notebook:cuda12
+                      <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-green-500 border-2 border-white animate-pulse" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2 font-mono text-sm font-bold text-gray-900">
+                        {containerName}
+                        <span className="px-1.5 py-0.5 bg-gray-100 text-gray-600 text-[10px] rounded font-mono">PyTorch 2.x</span>
                       </div>
-                    </td>
-                    <td className="py-3.5 px-4">
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-bold bg-green-50 text-green-800 border border-green-200 shadow-2xs">
-                        <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-                        Active Kernel (Executing)
+                      <div className="text-[11px] text-gray-400 font-mono mt-0.5">
+                        quay.io/jupyter/pytorch-notebook:cuda12 · Token: {tokenPrefix.slice(0, 8)}...
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-bold bg-green-50 text-green-800 border border-green-200">
+                      <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                      {isStopping ? 'Terminating...' : 'Active Kernel (Executing)'}
+                    </span>
+                    {!hasLiveData && (
+                      <span className="text-[10px] font-mono text-gray-400 bg-gray-100 px-2 py-0.5 rounded border border-gray-200">
+                        Awaiting telemetry...
                       </span>
-                    </td>
-                    <td className="py-3.5 px-4">
-                      <div className="font-mono font-bold text-orange-600">
-                        {allocatedVramMb >= 1024 ? `${(allocatedVramMb / 1024).toFixed(2)} GB` : `${Math.round(allocatedVramMb)} MB`} VRAM
-                      </div>
-                      <div className="text-[11px] text-gray-500 font-mono">
-                        {liveVramMb !== null ? "Live VRAM Consumption" : "PyTorch Matrix Compute Active"}
-                      </div>
-                    </td>
-                    <td className="py-3.5 px-4 text-gray-700 font-mono">
-                      <div className="font-semibold text-gray-900">
-                        {vramCapGb} GB VRAM Cap • {cpuCores} Cores {liveCpuCores !== null && <span className="text-orange-600 font-bold">({liveCpuCores.toFixed(1)} Cores Live)</span>}
-                      </div>
-                      <div className="text-[11px] text-gray-500">
-                        {ramGb} GB RAM Cap {liveRamGb !== null && <span className="text-blue-600 font-bold">({liveRamGb.toFixed(1)} GB Live)</span>}
-                      </div>
-                    </td>
-                    <td className="py-3.5 px-4 text-gray-600 font-mono text-[11px]">
-                      <div className="flex items-center gap-1.5 text-gray-900 font-medium">
-                        <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
-                        <span>Cloudflare WireGuard Quick Tunnel</span>
-                      </div>
-                      <div className="text-gray-400 mt-0.5 truncate max-w-[200px]">
-                        Port 8888 · Token Authenticated
-                      </div>
-                    </td>
-                    <td className="py-3.5 px-4 text-right">
-                      <button
-                        onClick={() => handleStopContainer(containerName)}
-                        disabled={isStopping}
-                        className="px-3 py-1.5 bg-white hover:bg-red-50 text-red-600 border border-red-200 rounded font-semibold text-xs transition cursor-pointer shadow-2xs disabled:opacity-50"
-                      >
-                        {isStopping ? 'Stopping...' : 'Stop Pod'}
-                      </button>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+                    )}
+                    <button
+                      onClick={() => handleStopContainer(containerName)}
+                      disabled={isStopping}
+                      className="px-3 py-1.5 bg-white hover:bg-red-50 text-red-600 border border-red-200 rounded font-semibold text-xs transition cursor-pointer shadow-2xs disabled:opacity-50"
+                    >
+                      {isStopping ? 'Stopping...' : 'Stop Pod'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Live resource bars */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-gray-50 border border-gray-200 rounded-lg p-4">
+
+                  {/* VRAM */}
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between items-center">
+                      <span className="text-[10px] uppercase font-bold tracking-wider text-gray-500">VRAM</span>
+                      <span className="text-[10px] font-mono font-bold text-orange-600">
+                        {liveVramMb >= 1024 ? (liveVramMb / 1024).toFixed(2) + ' GB' : Math.round(liveVramMb) + ' MB'}
+                        <span className="text-gray-400 font-normal"> / {capVramGb.toFixed(1)} GB</span>
+                      </span>
+                    </div>
+                    <div className="w-full h-2.5 bg-orange-100 rounded-full overflow-hidden border border-orange-200">
+                      <div
+                        style={{ width: vramPct + '%', transition: 'width 0.5s ease' }}
+                        className={'h-full rounded-full ' + vramColor}
+                      />
+                    </div>
+                    <div className="flex justify-between text-[10px] font-mono">
+                      <span className="text-orange-500">{vramPct.toFixed(0)}% of cap</span>
+                      <span className="text-gray-400">Cap: {capVramGb.toFixed(1)} GB</span>
+                    </div>
+                  </div>
+
+                  {/* RAM */}
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between items-center">
+                      <span className="text-[10px] uppercase font-bold tracking-wider text-gray-500">System RAM</span>
+                      <span className="text-[10px] font-mono font-bold text-blue-600">
+                        {liveRamGb.toFixed(2)} GB
+                        <span className="text-gray-400 font-normal"> / {capRamGb.toFixed(1)} GB</span>
+                      </span>
+                    </div>
+                    <div className="w-full h-2.5 bg-blue-100 rounded-full overflow-hidden border border-blue-200">
+                      <div
+                        style={{ width: ramPct + '%', transition: 'width 0.5s ease' }}
+                        className={'h-full rounded-full ' + ramColor}
+                      />
+                    </div>
+                    <div className="flex justify-between text-[10px] font-mono">
+                      <span className="text-blue-500">{ramPct.toFixed(0)}% of cap</span>
+                      <span className="text-gray-400">Cap: {capRamGb.toFixed(1)} GB</span>
+                    </div>
+                  </div>
+
+                  {/* CPU */}
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between items-center">
+                      <span className="text-[10px] uppercase font-bold tracking-wider text-gray-500">CPU Cores</span>
+                      <span className="text-[10px] font-mono font-bold text-green-600">
+                        {liveCpuCores.toFixed(2)} Cores
+                        <span className="text-gray-400 font-normal"> / {capCpuCores}</span>
+                      </span>
+                    </div>
+                    <div className="w-full h-2.5 bg-green-100 rounded-full overflow-hidden border border-green-200">
+                      <div
+                        style={{ width: cpuPct + '%', transition: 'width 0.5s ease' }}
+                        className={'h-full rounded-full ' + cpuColor}
+                      />
+                    </div>
+                    <div className="flex justify-between text-[10px] font-mono">
+                      <span className="text-green-500">{cpuPct.toFixed(0)}% of cap</span>
+                      <span className="text-gray-400">Cap: {capCpuCores} Cores</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Tunnel row */}
+                <div className="mt-3 flex flex-wrap items-center gap-4 text-[11px] font-mono text-gray-500">
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+                    <span className="text-gray-700 font-medium">Cloudflare WireGuard Quick Tunnel</span>
+                  </div>
+                  <span className="text-gray-400">Port 8888 · Token Authenticated</span>
+                </div>
+              </div>
+            )
+          })}
         </div>
       )}
     </div>

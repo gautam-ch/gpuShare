@@ -12,13 +12,10 @@ export default function GpuUsageCard({ gpu, providerConfig, activeContainers = [
     j => j.status === 'done' || j.status === 'assigned' || j.status === 'pending'
   )
 
-  // Client-reserved VRAM: if no containers are running, usage is strictly 0
-  const clientVramSum = activeJobs.reduce((sum, j) => sum + (j.vram_required_mb || 0), 0)
-  const usedVramMb = activeCount === 0
-    ? 0
-    : (gpu?.client_used_vram_mb !== undefined
-        ? gpu.client_used_vram_mb
-        : (clientVramSum > 0 ? Math.min(clientVramSum, sharedVramMb) : activeCount * 512))
+  // Always use live NVML data from agent (resets to 0 when kernel is killed).
+  // Never fall back to vram_required_mb (job reservation) — that number never
+  // decreases after a kernel kill and would keep the bar stuck at the cap.
+  const usedVramMb = activeCount === 0 ? 0 : (gpu?.client_used_vram_mb ?? 0)
 
   const freeVramMb = Math.max(0, sharedVramMb - usedVramMb)
 

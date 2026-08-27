@@ -14,12 +14,11 @@ export default function CpuRamUsageCard({ cpu, ram, providerConfig, activeContai
     j => j.status === 'done' || j.status === 'assigned' || j.status === 'pending'
   )
 
-  // If no containers are actively running on host, client usage is strictly 0
-  const rawCpu = activeJobs.reduce((sum, j) => sum + (j.cpu_cores || 0), 0)
-  const rawRam = activeJobs.reduce((sum, j) => sum + (j.ram_gb || 0), 0)
-
-  const clientCpuCores = activeCount === 0 ? 0 : (cpu?.client_used_cores !== undefined ? cpu.client_used_cores : (rawCpu > 0 ? Math.min(sharedCpus, rawCpu) : Math.min(sharedCpus, activeCount * 2)))
-  const clientRamGb = activeCount === 0 ? 0 : (ram?.client_used_gb !== undefined ? ram.client_used_gb : (rawRam > 0 ? Math.min(sharedRamGb, rawRam) : Math.min(sharedRamGb, activeCount * 4)))
+  // Always use live docker stats from agent (resets to 0 when kernel is killed).
+  // Never fall back to job reservation sums (cpu_cores / ram_gb from clusterJobs)
+  // because those are static allocation records that never decrease after a kernel kill.
+  const clientCpuCores = activeCount === 0 ? 0 : (cpu?.client_used_cores ?? 0)
+  const clientRamGb    = activeCount === 0 ? 0 : (ram?.client_used_gb    ?? 0)
 
   // Percentages relative to what was shared (not total physical)
   const clientCpuPct = sharedCpus > 0 ? Math.min(100, (clientCpuCores / sharedCpus) * 100) : 0

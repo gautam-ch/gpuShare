@@ -328,19 +328,79 @@ def get_tailscale_ip():
     return "127.0.0.1"
 
 
+def get_active_allocated_resources():
+    """
+    Sum up the allocated resource caps (VRAM GB, CPU cores, RAM GB)
+    of all currently running jupyter-* containers on this host.
+    """
+    total_alloc_vram_gb = 0.0
+    total_alloc_cpus = 0
+    total_alloc_ram_gb = 0.0
+    active_names = []
+
+    if not FLASK_AVAILABLE:
+        return {
+            "vram_gb": 0.0,
+            "cpus": 0,
+            "ram_gb": 0.0,
+            "active_containers": []
+        }
+
+    try:
+        client = docker.from_env()
+        for c in client.containers.list():
+            if c.name.startswith("jupyter-") and c.status == "running":
+                active_names.append(c.name)
+                env_vars = c.attrs.get("Config", {}).get("Env", [])
+                for env in env_vars:
+                    if env.startswith("GPUSHARE_VRAM_GB="):
+                        try:
+                            total_alloc_vram_gb += float(env.split("=")[1])
+                        except ValueError:
+                            pass
+                    elif env.startswith("GPUSHARE_CPU_CORES="):
+                        try:
+                            total_alloc_cpus += int(float(env.split("=")[1]))
+                        except ValueError:
+                            pass
+                    elif env.startswith("GPUSHARE_RAM_GB="):
+                        try:
+                            total_alloc_ram_gb += float(env.split("=")[1])
+                        except ValueError:
+                            pass
+    except Exception:
+        pass
+
+    return {
+        "vram_gb": total_alloc_vram_gb,
+        "cpus": total_alloc_cpus,
+        "ram_gb": total_alloc_ram_gb,
+        "active_containers": active_names
+    }
+
+
 def get_gpu_stats():
     """
-    Return VRAM and CPU stats capped to the provider's configured limits.
+    Return VRAM and CPU stats capped to the provider's configured limits,
+    accounting for resources already committed to active pods.
     """
-    max_shared_vram_mb = get_current_provider_config().get("shared_vram_gb", 8.0) * 1024
-    max_shared_cpus = get_current_provider_config().get("shared_cpus", os.cpu_count() or 4)
+    cfg = get_current_provider_config()
+    max_shared_vram_mb = float(cfg.get("shared_vram_gb", 8.0)) * 1024
+    max_shared_cpus = int(cfg.get("shared_cpus", os.cpu_count() or 4))
+
+    allocated = get_active_allocated_resources()
+    committed_vram_mb = allocated["vram_gb"] * 1024
+    committed_cpus = allocated["cpus"]
+
+    available_shared_vram_mb = max(0.0, max_shared_vram_mb - committed_vram_mb)
+    available_shared_cpus = max(0, max_shared_cpus - committed_cpus)
 
     if not GPU_AVAILABLE:
         return {
             "vram_total_mb": max_shared_vram_mb,
             "vram_used_mb": 0,
-            "vram_free_mb": max_shared_vram_mb,
-            "cpus": max_shared_cpus,
+            "vram_free_mb": available_shared_vram_mb,
+            "cpus": available_shared_cpus,
             "gpu_util_pct": 0,
             "temp_c": 45,
         }
@@ -362,13 +422,14 @@ def get_gpu_stats():
 
         actual_used_mb = round(info.used / 1024**2, 1)
         actual_free_mb = round(info.free / 1024**2, 1)
-        capped_free_mb = min(actual_free_mb, max_shared_vram_mb)
+        # Capped by both physical free memory and remaining shared quota
+        capped_free_mb = min(actual_free_mb, available_shared_vram_mb)
 
         return {
             "vram_total_mb": max_shared_vram_mb,
             "vram_used_mb": actual_used_mb,
             "vram_free_mb": capped_free_mb,
-            "cpus": max_shared_cpus,
+            "cpus": available_shared_cpus,
             "gpu_util_pct": gpu_util,
             "temp_c": temp,
         }
@@ -918,6 +979,10 @@ def send_heartbeat():
     stats = get_gpu_stats()
     tailscale_ip = get_tailscale_ip()
     config = get_current_provider_config()
+    allocated = get_active_allocated_resources()
+    
+    avail_ram_gb = max(0.0, float(config.get("shared_ram_gb", 8.0)) - allocated["ram_gb"])
+    
     payload = {
         "machine_id": MACHINE_ID,
         "tailscale_ip": tailscale_ip,
@@ -925,7 +990,7 @@ def send_heartbeat():
         "vram_total_mb": stats["vram_total_mb"],
         "vram_free_mb": stats["vram_free_mb"],
         "cpus": stats["cpus"],
-        "shared_ram_gb": float(config.get("shared_ram_gb", 8.0)),
+        "shared_ram_gb": avail_ram_gb,
     }
     try:
         resp = requests.post(BACKEND_URL, json=payload, timeout=5)
@@ -941,10 +1006,34 @@ def send_heartbeat():
                 req_ram = job.get("ram_gb", 8)
                 req_vram = float(job.get("vram_gb", 2.0))
 
+                # Check if host still has capacity in the shared pool
+                cur_alloc = get_active_allocated_resources()
+                max_vram_gb = float(config.get("shared_vram_gb", 4.0))
+                max_cpus = int(config.get("shared_cpus", 4))
+                max_ram = float(config.get("shared_ram_gb", 8.0))
+
+                rem_vram = max(0.0, max_vram_gb - cur_alloc["vram_gb"])
+                rem_cpus = max(0, max_cpus - cur_alloc["cpus"])
+                rem_ram = max(0.0, max_ram - cur_alloc["ram_gb"])
+
+                if req_vram > (rem_vram + 0.05) or req_cpu > rem_cpus or req_ram > (rem_ram + 0.1):
+                    err = f"Shared capacity exhausted! Available: {rem_vram:.1f}GB VRAM, {rem_cpus} CPUs, {rem_ram:.1f}GB RAM"
+                    print(f"[Agent] [Capacity Guard] Rejecting dispatched job #{j_id}: {err}")
+                    try:
+                        complete_url = BACKEND_URL.replace("/heartbeat", "/complete-job")
+                        requests.post(complete_url, json={
+                            "job_id": int(j_id),
+                            "status": "error",
+                            "detail": err
+                        }, timeout=5)
+                    except Exception:
+                        pass
+                    continue
+
                 # Clamp to provider max limits
-                cpu_cores = min(req_cpu, config.get("shared_cpus", 4))
-                ram_gb = min(req_ram, int(config.get("shared_ram_gb", 8.0)))
-                vram_gb = min(req_vram, float(config.get("shared_vram_gb", 4.0)))
+                cpu_cores = min(req_cpu, rem_cpus)
+                ram_gb = min(req_ram, int(rem_ram))
+                vram_gb = min(req_vram, rem_vram)
 
                 print(f"[Agent] Received new job #{j_id}! (Allocated: {vram_gb:.1f}GB VRAM, {cpu_cores} CPUs, {ram_gb}GB RAM) Starting Jupyter...")
                 threading.Thread(
@@ -1391,10 +1480,24 @@ except Exception:
         job_id = uuid.uuid4().hex[:12]
 
         config = get_current_provider_config()
+        cur_alloc = get_active_allocated_resources()
 
-        cpu_cores = min(req_cpu, config.get("shared_cpus", 4))
-        ram_gb = min(req_ram, int(config.get("shared_ram_gb", 8.0)))
-        vram_gb = min(req_vram, float(config.get("shared_vram_gb", 4.0)))
+        max_vram_gb = float(config.get("shared_vram_gb", 4.0))
+        max_cpus = int(config.get("shared_cpus", 4))
+        max_ram = float(config.get("shared_ram_gb", 8.0))
+
+        rem_vram = max(0.0, max_vram_gb - cur_alloc["vram_gb"])
+        rem_cpus = max(0, max_cpus - cur_alloc["cpus"])
+        rem_ram = max(0.0, max_ram - cur_alloc["ram_gb"])
+
+        if req_vram > (rem_vram + 0.05) or req_cpu > rem_cpus or req_ram > (rem_ram + 0.1):
+            err = f"Shared capacity exhausted! Available in shared pool: {rem_vram:.1f}GB VRAM, {rem_cpus} CPUs, {rem_ram:.1f}GB RAM"
+            print(f"[Agent] [Capacity Guard] Rejecting /run-jupyter: {err}")
+            return jsonify({"status": "rejected", "error": err}), 429
+
+        cpu_cores = min(req_cpu, rem_cpus)
+        ram_gb = min(req_ram, int(rem_ram))
+        vram_gb = min(req_vram, rem_vram)
 
         job_store[job_id] = {"status": "pending"}
         t = threading.Thread(
@@ -1404,7 +1507,7 @@ except Exception:
         )
         t.start()
 
-        print(f"[Agent] Job {job_id} queued (VRAM:{vram_gb}GB, CPU:{cpu_cores}, RAM:{ram_gb}GB) for token {token[:8]}...")
+        print(f"[Agent] Job {job_id} queued (VRAM:{vram_gb:.1f}GB, CPU:{cpu_cores}, RAM:{ram_gb:.1f}GB) for token {token[:8]}...")
         return jsonify({"status": "pending", "job_id": job_id}), 202
 
     @flask_app.route("/job-status/<job_id>", methods=["GET"])
@@ -1551,43 +1654,55 @@ except Exception:
         except Exception as e:
             return jsonify({"containers": [], "logs": {}, "error": str(e)}), 500
 
-    @flask_app.route("/stop-container", methods=["POST"])
+    @flask_app.route("/stop-container", methods=["POST", "OPTIONS"])
     def stop_container():
         """Stop and remove a specific running Jupyter container and release its hardware."""
-        data = flask_request.get_json() or {}
-        c_name = data.get("container_name")
+        if flask_request.method == "OPTIONS":
+            return jsonify({}), 200
+
+        data = flask_request.get_json(silent=True) or {}
+        c_name = data.get("container_name") or ""
         if not c_name:
             return jsonify({"status": "error", "message": "Missing container_name"}), 400
 
+        token = c_name.replace("jupyter-", "").strip()
+        print(f"[Agent] Stop request received for: {c_name} (token: {token[:8] if token else ''})")
+
+        stopped = False
         try:
             client = docker.from_env()
-            stopped = False
             for container in client.containers.list(all=True):
-                if container.name == c_name or container.short_id == c_name:
-                    container.stop(timeout=5)
+                if (
+                    container.name == c_name
+                    or container.short_id == c_name
+                    or (c_name and c_name in container.name)
+                    or (token and token in container.name)
+                ):
                     try:
+                        print(f"[Agent] Terminating container: {container.name}")
+                        try:
+                            container.kill()
+                        except Exception:
+                            container.stop(timeout=2)
                         container.remove(force=True)
-                    except Exception:
-                        pass
-                    stopped = True
-                    print(f"[Agent] Stopped and reclaimed container: {container.name}")
-                    break
-
-            # Terminate associated quick tunnel
-            token = c_name.replace("jupyter-", "")
-            if token in active_tunnels:
-                try:
-                    active_tunnels[token].terminate()
-                    del active_tunnels[token]
-                except Exception:
-                    pass
-
-            return jsonify({
-                "status": "stopped" if stopped else "not_found",
-                "container_name": c_name
-            }), 200
+                        stopped = True
+                        print(f"[Agent] Removed container: {container.name}")
+                    except Exception as ce:
+                        print(f"[Agent] Error removing container: {ce}")
         except Exception as e:
-            return jsonify({"status": "error", "message": str(e)}), 500
+            print(f"[Agent] Docker error: {e}")
+
+        # Also trigger complete cleanup helper (tunnels, local job store, backend notification)
+        try:
+            stop_and_cleanup_pod(token)
+            stopped = True
+        except Exception as te:
+            print(f"[Agent] Cleanup helper notice: {te}")
+
+        return jsonify({
+            "status": "stopped" if stopped else "not_found",
+            "container_name": c_name
+        }), 200
 
     @flask_app.route("/shutdown", methods=["POST"])
     def shutdown():
