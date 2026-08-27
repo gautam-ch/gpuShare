@@ -40,3 +40,5 @@ Thumbs.db
 *.log
 scratch/
 SYSTEM_ARCHITECTURE.md
+
+host-agent/host_config.json
