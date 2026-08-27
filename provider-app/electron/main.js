@@ -637,7 +637,7 @@ ipcMain.handle('run-full-ml-setup', async (event, config) => {
 
   try {
     sendLog('=====================================================')
-    sendLog('STARTING FULL ML / JUPYTERHUB / PYTORCH GPU SETUP')
+    sendLog('STARTING FULL ML / Kinetic / PYTORCH GPU SETUP')
     sendLog('=====================================================')
 
     // STEP 1: Connect Tailscale WireGuard Mesh

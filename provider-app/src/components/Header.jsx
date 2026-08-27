@@ -21,7 +21,7 @@ export default function Header({
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-base font-bold text-gray-900 tracking-tight leading-tight">
-              JupyterHub <span className="text-xs font-semibold px-2 py-0.5 bg-orange-100 text-orange-800 rounded border border-orange-200">Provider Node</span>
+              Kinetic <span className="text-xs font-semibold px-2 py-0.5 bg-orange-100 text-orange-800 rounded border border-orange-200">Provider Node</span>
             </h1>
           </div>
           <p className="text-[11px] text-gray-500 mt-0.5">Real-time GPU compute & workload monitoring</p>
