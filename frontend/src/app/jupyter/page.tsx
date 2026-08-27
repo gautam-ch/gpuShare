@@ -140,33 +140,33 @@ function JupyterWorkspace() {
   }
 
   return (
-    <main className="min-h-screen bg-[#f8f9fa] text-gray-900 flex flex-col">
-      {/* JupyterHub Header */}
-      <header className="bg-white border-b border-gray-200 px-4 sm:px-6 h-14 flex justify-between items-center shrink-0">
+    <main className="min-h-screen bg-[#fcfcfd] text-gray-900 flex flex-col">
+      {/* Top Header */}
+      <header className="bg-white border-b border-gray-200/80 px-4 sm:px-6 h-14 flex justify-between items-center shrink-0 shadow-xs">
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <svg className="w-6 h-6" viewBox="0 0 44 44" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <circle cx="22" cy="7" r="4" fill="#616161" />
-              <path d="M7.5 22C7.5 13.9919 13.9919 7.5 22 7.5C22.68 7.5 23.3448 7.54707 23.9942 7.63821C16.9209 8.63185 11.5 14.6806 11.5 22C11.5 29.3194 16.9209 35.3681 23.9942 36.3618C23.3448 36.4529 22.68 36.5 22 36.5C13.9919 36.5 7.5 30.0081 7.5 22Z" fill="#F37626" />
-              <circle cx="22" cy="37" r="4" fill="#616161" />
-              <circle cx="34" cy="14" r="3.5" fill="#616161" />
-              <circle cx="10" cy="30" r="3" fill="#616161" />
+          <Link href="/" className="flex items-center gap-2.5 text-decoration-none group">
+            {/* Unique Kinetic Dynamic Symbol */}
+            <svg className="w-7 h-7 transition-transform duration-300 group-hover:scale-105" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect width="32" height="32" rx="7" fill="#111827" />
+              <path d="M8 8L16 16L8 24" stroke="#ffffff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.4" />
+              <path d="M14 8L22 16L14 24" stroke="#bb432c" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+              <circle cx="23.5" cy="16" r="2" fill="#bb432c" />
             </svg>
-            <span className="font-bold text-base tracking-tight text-gray-900">
-              JupyterHub <span className="font-normal text-gray-500">/ Workspace</span>
+            <span className="font-bold text-lg tracking-tight text-gray-900">
+              Kinetic
             </span>
-          </div>
+          </Link>
         </div>
 
         <nav className="flex items-center gap-2 sm:gap-4 text-sm font-medium text-gray-600">
-          <Link href="/" className="px-3 py-1.5 hover:text-gray-900 transition-colors rounded hover:bg-gray-100">
-            Spawner
+          <Link href="/" className="px-3 py-1.5 hover:text-gray-900 transition-colors rounded hover:bg-gray-100/80">
+            Rent GPU
           </Link>
-          <Link href="/host" className="px-3 py-1.5 hover:text-gray-900 transition-colors rounded hover:bg-gray-100">
-            Host Node
+          <Link href="/jupyter" className="px-3 py-1.5 text-[#bb432c] border-b-2 border-[#bb432c] font-semibold">
+            Workspace
           </Link>
-          <Link href="/admin" className="px-3 py-1.5 hover:text-gray-900 transition-colors rounded hover:bg-gray-100">
-            Admin
+          <Link href="/host" className="px-3 py-1.5 hover:text-gray-900 transition-colors rounded hover:bg-gray-100/80">
+            Host a Node
           </Link>
         </nav>
       </header>
@@ -192,7 +192,7 @@ function JupyterWorkspace() {
                 value={token}
                 onChange={e => setToken(e.target.value)}
                 disabled={loading}
-                className="w-full rounded border border-gray-300 bg-white px-3.5 py-2.5 text-gray-900 placeholder-gray-400 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 font-mono text-xs transition disabled:bg-gray-100"
+                className="w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-gray-900 placeholder-gray-400 focus:outline-none focus:border-[#bb432c] focus:ring-1 focus:ring-[#bb432c] font-mono text-xs transition disabled:bg-gray-100"
               />
             </div>
 
@@ -200,7 +200,7 @@ function JupyterWorkspace() {
               id="launch-btn"
               onClick={() => triggerLaunch()}
               disabled={loading || !token}
-              className="w-full py-2.5 bg-[#F37626] hover:bg-[#d95f0e] text-white font-semibold text-sm rounded shadow-xs transition disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2"
+              className="w-full py-2.5 bg-[#bb432c] hover:bg-[#9c3622] text-white font-semibold text-sm rounded-lg shadow-xs transition disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2"
             >
               {loading ? (
                 <>
@@ -208,19 +208,19 @@ function JupyterWorkspace() {
                   <span>{PROGRESS_MESSAGES[progressIdx]}</span>
                 </>
               ) : (
-                <span>Start Server</span>
+                <span>Launch Workspace</span>
               )}
             </button>
 
             {loading && (
-              <div className="bg-gray-50 border border-gray-200 rounded p-3 text-xs text-gray-600 space-y-1">
-                <div className="font-semibold text-gray-800">Spawning Status:</div>
+              <div className="bg-gray-50 border border-gray-200/80 rounded-lg p-3 text-xs text-gray-600 space-y-1">
+                <div className="font-semibold text-gray-800">Connection Status:</div>
                 <p>Node Reserved</p>
                 <p className={progressIdx >= 1 ? 'font-medium text-gray-900' : 'text-gray-400'}>
                   {progressIdx >= 1 ? 'Starting Container...' : 'Container initialization'}
                 </p>
                 <p className={progressIdx >= 4 ? 'font-medium text-gray-900' : 'text-gray-400'}>
-                  {progressIdx >= 4 ? 'Establishing secure connection...' : 'Network tunnel'}
+                  {progressIdx >= 4 ? 'Establishing secure tunnel...' : 'Network tunnel'}
                 </p>
                 <p className="text-[11px] text-gray-400 italic pt-1">
                   Note: Initial image pull may take 1-2 minutes.
@@ -229,10 +229,10 @@ function JupyterWorkspace() {
             )}
 
             {message && (
-              <div className={`p-3 rounded text-xs text-center border font-medium ${
+              <div className={`p-3 rounded-lg text-xs text-center border font-medium ${
                 message.includes('successfully')
-                  ? 'bg-green-50 border-green-200 text-green-800'
-                  : 'bg-red-50 border-red-200 text-red-800'
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                  : 'bg-rose-50 border-rose-200 text-rose-800'
               }`}>
                 {message}
               </div>

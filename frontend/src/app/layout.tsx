@@ -13,8 +13,11 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "GPU Share Hub",
-  description: "Decentralized GPU sharing network",
+  title: "Kinetic — Decentralized GPU Compute Mesh",
+  description: "High-performance decentralized GPU compute network and Jupyter workspaces",
+  icons: {
+    icon: '/icon.svg',
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -23,7 +26,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col bg-[#f8f9fa] text-gray-900 selection:bg-orange-100 selection:text-orange-900">
+      <body className="min-h-full flex flex-col bg-[#fcfcfd] text-gray-900 selection:bg-[#bb432c]/10 selection:text-[#bb432c]">
         {children}
       </body>
     </html>

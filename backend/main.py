@@ -210,7 +210,7 @@ async def rent_gpu(req: RentRequest, db: Session = Depends(get_db)):
     if not online_machines:
         raise HTTPException(
             status_code=404,
-            detail="No GPU provider machines are currently online. Please ensure your host agent is running."
+            detail="No GPU provider machines are currently online."
         )
 
     max_vram_avail = max((m.vram_total_mb or m.vram_free_mb or 0) for m in online_machines) / 1024

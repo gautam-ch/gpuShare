@@ -160,24 +160,21 @@ export default function RentForm() {
 
   return (
     <section className="space-y-8 pb-12 max-w-5xl mx-auto">
-      {/* JupyterHub Spawner Header */}
-      <div className="bg-white border border-gray-200 rounded-lg p-6 sm:p-8 shadow-xs">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-gray-100 pb-5 mb-5">
+      {/* Rent Header Card */}
+      <div className="bg-white border border-gray-200/80 rounded-xl p-6 sm:p-8 shadow-xs">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-gray-100 pb-5 mb-6">
           <div>
-            <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded bg-orange-50 border border-orange-200 text-orange-800 text-xs font-semibold uppercase tracking-wide mb-2">
-              <span>Server Spawner Options</span>
-            </div>
             <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 tracking-tight">
-              Spawn Compute Environment
+              Rent GPU Environment
             </h1>
             <p className="text-gray-600 text-sm mt-1 max-w-2xl">
-              Select your desired GPU profile or configure hardware resources. Your JupyterLab environment will be spun up on a dedicated node.
+              Select your workload profile or customize dedicated compute resources for your JupyterLab workspace.
             </p>
           </div>
 
-          <div className="flex flex-col items-start sm:items-end bg-gray-50 border border-gray-200 rounded-md p-3 shrink-0">
+          <div className="flex flex-col items-start sm:items-end bg-gray-50 border border-gray-200/80 rounded-lg p-3.5 shrink-0">
             <div className="flex items-center gap-2">
-              <span className={`w-2.5 h-2.5 rounded-full ${onlineMachines.length > 0 ? 'bg-green-500' : 'bg-gray-400'}`}></span>
+              <span className={`w-2.5 h-2.5 rounded-full ${onlineMachines.length > 0 ? 'bg-emerald-500 shadow-xs' : 'bg-gray-400'}`}></span>
               <span className="text-xs font-semibold text-gray-800">
                 {onlineMachines.length > 0 ? `${onlineMachines.length} Node${onlineMachines.length > 1 ? 's' : ''} Online` : 'No Nodes Detected'}
               </span>
@@ -191,38 +188,38 @@ export default function RentForm() {
         {/* Section 1: Pre-configured Profiles */}
         <div className="space-y-4">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-gray-700 flex items-center gap-2">
-              <span>1. Choose Environment Profile</span>
+            <h2 className="text-xs font-bold uppercase tracking-wider text-gray-500 flex items-center gap-2">
+              <span>1. Choose Workload Profile</span>
             </h2>
             <button
               type="button"
               onClick={() => setShowGuide(!showGuide)}
-              className="text-xs text-orange-600 hover:text-orange-700 hover:underline font-medium flex items-center gap-1 cursor-pointer"
+              className="text-xs text-[#bb432c] hover:text-[#9c3622] hover:underline font-medium flex items-center gap-1 cursor-pointer"
             >
-              {showGuide ? 'Hide Resource Guide' : 'Sizing Guide & Help'}
+              {showGuide ? 'Hide Sizing Guide' : 'Sizing Guide & Workload Help'}
             </button>
           </div>
 
           {/* Sizing Guide */}
           {showGuide && (
-            <div className="bg-gray-50 border border-gray-200 rounded-md p-4 text-xs space-y-3">
+            <div className="bg-gray-50 border border-gray-200/80 rounded-lg p-4 text-xs space-y-3">
               <div className="font-semibold text-gray-900 text-sm">
                 Resource Allocation Guide
               </div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-gray-700">
-                <div className="bg-white p-3 rounded border border-gray-200 space-y-1">
-                  <div className="font-bold text-orange-700">GPU VRAM</div>
+                <div className="bg-white p-3 rounded-md border border-gray-200 space-y-1">
+                  <div className="font-bold text-[#bb432c]">GPU VRAM</div>
                   <p className="text-gray-600 leading-relaxed">
-                    Determines model and batch fitting in video memory.
+                    Determines model architecture and batch sizes in video memory.
                   </p>
                   <ul className="list-disc list-inside text-gray-500 text-[11px] space-y-0.5 pt-1">
                     <li><strong>2-4 GB:</strong> ResNet, Tabular, YOLOv8</li>
                     <li><strong>6-8 GB:</strong> Stable Diffusion, Whisper</li>
-                    <li><strong>12+ GB:</strong> Quantized LLMs, LoRA</li>
+                    <li><strong>12+ GB:</strong> Quantized LLMs, LoRA Fine-tuning</li>
                   </ul>
                 </div>
 
-                <div className="bg-white p-3 rounded border border-gray-200 space-y-1">
+                <div className="bg-white p-3 rounded-md border border-gray-200 space-y-1">
                   <div className="font-bold text-gray-800">CPU Cores</div>
                   <p className="text-gray-600 leading-relaxed">
                     Runs preprocessing, tokenization, & DataLoader workers.
@@ -234,10 +231,10 @@ export default function RentForm() {
                   </ul>
                 </div>
 
-                <div className="bg-white p-3 rounded border border-gray-200 space-y-1">
+                <div className="bg-white p-3 rounded-md border border-gray-200 space-y-1">
                   <div className="font-bold text-gray-800">System RAM</div>
                   <p className="text-gray-600 leading-relaxed">
-                    Stores in-memory datasets and DataFrames before GPU copy.
+                    Stores in-memory datasets and DataFrames before GPU transfer.
                   </p>
                   <ul className="list-disc list-inside text-gray-500 text-[11px] space-y-0.5 pt-1">
                     <li><strong>4 GB:</strong> CSV / small datasets</li>
@@ -258,10 +255,10 @@ export default function RentForm() {
                 <div
                   key={preset.id}
                   onClick={() => applyPreset(preset)}
-                  className={`p-4 rounded-md border text-left cursor-pointer transition-all flex flex-col justify-between relative ${
+                  className={`p-4 rounded-xl border text-left cursor-pointer transition-all flex flex-col justify-between relative ${
                     isSelected
-                      ? 'bg-orange-50/50 border-orange-500 ring-1 ring-orange-500'
-                      : 'bg-white border-gray-200 hover:border-gray-300 hover:bg-gray-50/50'
+                      ? 'bg-[#bb432c]/5 border-[#bb432c] ring-1 ring-[#bb432c] shadow-xs'
+                      : 'bg-white border-gray-200 hover:border-gray-300 hover:bg-gray-50/60'
                   }`}
                 >
                   <div>
@@ -272,7 +269,7 @@ export default function RentForm() {
                         name="preset"
                         checked={isSelected}
                         onChange={() => applyPreset(preset)}
-                        className="text-orange-600 focus:ring-orange-500 h-4 w-4"
+                        className="text-[#bb432c] focus:ring-[#bb432c] h-4 w-4 accent-[#bb432c]"
                       />
                     </div>
 
@@ -293,7 +290,7 @@ export default function RentForm() {
                   </div>
 
                   <div className="pt-3 border-t border-gray-100 flex items-center justify-between text-xs font-mono text-gray-700">
-                    <span className="font-bold text-orange-700">{preset.vram} GB VRAM</span>
+                    <span className="font-bold text-[#bb432c]">{preset.vram} GB VRAM</span>
                     <span>{preset.cpus} CPUs</span>
                     <span>{preset.ram} GB RAM</span>
                   </div>
@@ -306,7 +303,7 @@ export default function RentForm() {
         {/* Section 2: Custom Resource Sliders */}
         <div className="mt-8 pt-6 border-t border-gray-200 space-y-6">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-gray-700">
+            <h2 className="text-xs font-bold uppercase tracking-wider text-gray-500">
               2. Custom Hardware Configuration
             </h2>
             {selectedPreset === 'custom' && (
@@ -320,7 +317,7 @@ export default function RentForm() {
           <div className="space-y-2">
             <div className="flex justify-between items-center text-sm">
               <div className="font-semibold text-gray-800 flex items-center gap-2">
-                <span>GPU Video RAM (VRAM)</span>
+                <span>GPU Memory (VRAM)</span>
               </div>
               <span className="px-2.5 py-0.5 bg-gray-100 border border-gray-300 rounded font-mono font-bold text-gray-900 text-sm">
                 {vram} GB
@@ -336,9 +333,9 @@ export default function RentForm() {
                     type="button"
                     disabled={isDisabled}
                     onClick={() => !isDisabled && handleCustomChange('vram', v)}
-                    className={`py-2 text-xs font-mono font-bold rounded border transition-colors ${
+                    className={`py-2 text-xs font-mono font-bold rounded-lg border transition-colors ${
                       active
-                        ? 'bg-orange-600 text-white border-orange-600 shadow-xs'
+                        ? 'bg-[#bb432c] text-white border-[#bb432c] shadow-xs'
                         : isDisabled
                         ? 'bg-gray-100 border-gray-200 text-gray-400 cursor-not-allowed'
                         : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50 cursor-pointer'
@@ -372,7 +369,7 @@ export default function RentForm() {
                     type="button"
                     disabled={isDisabled}
                     onClick={() => !isDisabled && handleCustomChange('cpu', c)}
-                    className={`py-2 text-xs font-mono font-bold rounded border transition-colors ${
+                    className={`py-2 text-xs font-mono font-bold rounded-lg border transition-colors ${
                       active
                         ? 'bg-gray-900 text-white border-gray-900 shadow-xs'
                         : isDisabled
@@ -408,7 +405,7 @@ export default function RentForm() {
                     type="button"
                     disabled={isDisabled}
                     onClick={() => !isDisabled && handleCustomChange('ram', r)}
-                    className={`py-2 text-xs font-mono font-bold rounded border transition-colors ${
+                    className={`py-2 text-xs font-mono font-bold rounded-lg border transition-colors ${
                       active
                         ? 'bg-gray-900 text-white border-gray-900 shadow-xs'
                         : isDisabled
@@ -426,7 +423,7 @@ export default function RentForm() {
 
           {/* Capacity Alert */}
           {(isOverVram || isOverCpu || isOverRam) && (
-            <div className="bg-amber-50 border border-amber-200 rounded-md p-4 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-amber-800">
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-amber-800">
               <div>
                 <strong>Warning:</strong> Selection exceeds provider limits (Max: {maxAvailableVram} GB VRAM · {maxAvailableCpus} CPUs · {maxAvailableRam} GB RAM).
               </div>
@@ -437,7 +434,7 @@ export default function RentForm() {
                   if (maxAvailableCpus) setCpuCores(Math.min(cpuCores, maxAvailableCpus))
                   if (maxAvailableRam) setRamGb(Math.min(ramGb, maxAvailableRam))
                 }}
-                className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-medium rounded transition cursor-pointer shrink-0"
+                className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-medium rounded-md transition cursor-pointer shrink-0"
               >
                 Auto-Adjust to Provider Limits
               </button>
@@ -446,13 +443,13 @@ export default function RentForm() {
 
           {/* Summary & Submit Action */}
           <div className="mt-8 pt-6 border-t border-gray-200">
-            <div className="bg-gray-50 border border-gray-200 rounded-lg p-5 flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div className="bg-gray-50 border border-gray-200 rounded-xl p-5 flex flex-col sm:flex-row items-center justify-between gap-4">
               <div>
                 <div className="text-xs uppercase tracking-wider text-gray-500 font-semibold mb-1">
                   Selected Hardware Profile
                 </div>
                 <div className="text-base font-mono font-bold text-gray-900 flex items-center gap-2">
-                  <span className="text-orange-600">{vram} GB VRAM</span>
+                  <span className="text-[#bb432c]">{vram} GB VRAM</span>
                   <span className="text-gray-400">•</span>
                   <span>{cpuCores} Cores</span>
                   <span className="text-gray-400">•</span>
@@ -464,7 +461,7 @@ export default function RentForm() {
                 id="rent-btn"
                 onClick={handleRent}
                 disabled={loading}
-                className="w-full sm:w-auto px-6 py-3 bg-[#F37626] hover:bg-[#d95f0e] text-white font-semibold text-sm rounded-md shadow-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 cursor-pointer"
+                className="w-full sm:w-auto px-7 py-3 bg-[#bb432c] hover:bg-[#9c3622] text-white font-semibold text-sm rounded-lg shadow-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 cursor-pointer"
               >
                 {loading ? (
                   <>
@@ -472,17 +469,17 @@ export default function RentForm() {
                     <span>Provisioning Node…</span>
                   </>
                 ) : (
-                  <span>Start Server</span>
+                  <span>Rent GPU</span>
                 )}
               </button>
             </div>
 
             {/* Status Message */}
             {message && (
-              <div className={`mt-4 p-3.5 rounded-md text-sm border font-medium ${
+              <div className={`mt-4 p-3.5 rounded-lg text-sm border font-medium ${
                 message.includes('successfully') || message.includes('✅')
-                  ? 'bg-green-50 border-green-200 text-green-800'
-                  : 'bg-red-50 border-red-200 text-red-800'
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                  : 'bg-rose-50 border-rose-200 text-rose-800'
               }`}>
                 {message}
               </div>
@@ -490,23 +487,23 @@ export default function RentForm() {
 
             {/* Token & Launch Section */}
             {token && (
-              <div className="mt-5 bg-white border border-gray-300 rounded-lg p-5 space-y-4 shadow-xs">
+              <div className="mt-5 bg-white border border-gray-300 rounded-xl p-5 space-y-4 shadow-xs">
                 <div className="flex items-center justify-between border-b border-gray-100 pb-3">
                   <div>
                     <span className="text-xs font-bold uppercase tracking-wider text-gray-700">Server Authorization Token</span>
                     <p className="text-xs text-gray-500">Your session has been assigned. Keep this token to access or resume your server.</p>
                   </div>
-                  <span className="px-2 py-1 bg-green-100 text-green-800 text-xs font-semibold rounded">Ready</span>
+                  <span className="px-2 py-1 bg-emerald-100 text-emerald-800 text-xs font-semibold rounded-md">Ready</span>
                 </div>
 
-                <div className="bg-gray-100 p-3 rounded border border-gray-200 font-mono text-xs text-gray-900 break-all select-all">
+                <div className="bg-gray-100 p-3 rounded-lg border border-gray-200 font-mono text-xs text-gray-900 break-all select-all">
                   {token}
                 </div>
 
                 <button
                   id="launch-jupyter-btn"
                   onClick={handleLaunch}
-                  className="w-full py-3 bg-gray-900 hover:bg-gray-800 text-white font-semibold text-sm rounded-md transition-colors flex items-center justify-center gap-2 shadow-xs cursor-pointer"
+                  className="w-full py-3 bg-gray-900 hover:bg-gray-800 text-white font-semibold text-sm rounded-lg transition-colors flex items-center justify-center gap-2 shadow-xs cursor-pointer"
                 >
                   <span>Open JupyterLab Workspace</span>
                   <span>→</span>

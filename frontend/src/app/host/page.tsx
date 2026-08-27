@@ -61,33 +61,33 @@ export default function HostPage() {
   const windowsCmd = `irm ${BACKEND_URL}/install-script-windows | iex`
 
   return (
-    <div className="min-h-screen bg-[#f8f9fa] text-gray-900 flex flex-col">
-      {/* JupyterHub Header */}
-      <header className="bg-white border-b border-gray-200 px-4 sm:px-6 h-14 flex justify-between items-center sticky top-0 z-50">
+    <div className="min-h-screen bg-[#fcfcfd] text-gray-900 flex flex-col">
+      {/* Top Header */}
+      <header className="bg-white border-b border-gray-200/80 px-4 sm:px-6 h-14 flex justify-between items-center sticky top-0 z-50 shadow-xs">
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <svg className="w-6 h-6" viewBox="0 0 44 44" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <circle cx="22" cy="7" r="4" fill="#616161" />
-              <path d="M7.5 22C7.5 13.9919 13.9919 7.5 22 7.5C22.68 7.5 23.3448 7.54707 23.9942 7.63821C16.9209 8.63185 11.5 14.6806 11.5 22C11.5 29.3194 16.9209 35.3681 23.9942 36.3618C23.3448 36.4529 22.68 36.5 22 36.5C13.9919 36.5 7.5 30.0081 7.5 22Z" fill="#F37626" />
-              <circle cx="22" cy="37" r="4" fill="#616161" />
-              <circle cx="34" cy="14" r="3.5" fill="#616161" />
-              <circle cx="10" cy="30" r="3" fill="#616161" />
+          <Link href="/" className="flex items-center gap-2.5 text-decoration-none group">
+            {/* Unique Kinetic Dynamic Symbol */}
+            <svg className="w-7 h-7 transition-transform duration-300 group-hover:scale-105" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect width="32" height="32" rx="7" fill="#111827" />
+              <path d="M8 8L16 16L8 24" stroke="#ffffff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.4" />
+              <path d="M14 8L22 16L14 24" stroke="#bb432c" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+              <circle cx="23.5" cy="16" r="2" fill="#bb432c" />
             </svg>
-            <span className="font-bold text-base tracking-tight text-gray-900">
-              JupyterHub <span className="font-normal text-gray-500">/ Node Provider</span>
+            <span className="font-bold text-lg tracking-tight text-gray-900">
+              Kinetic
             </span>
-          </div>
+          </Link>
         </div>
 
         <nav className="flex items-center gap-2 sm:gap-4 text-sm font-medium text-gray-600">
-          <Link href="/" className="px-3 py-1.5 hover:text-gray-900 transition-colors rounded hover:bg-gray-100">
-            Spawner
+          <Link href="/" className="px-3 py-1.5 hover:text-gray-900 transition-colors rounded hover:bg-gray-100/80">
+            Rent GPU
           </Link>
-          <Link href="/jupyter" className="px-3 py-1.5 hover:text-gray-900 transition-colors rounded hover:bg-gray-100">
+          <Link href="/jupyter" className="px-3 py-1.5 hover:text-gray-900 transition-colors rounded hover:bg-gray-100/80">
             Workspace
           </Link>
-          <Link href="/admin" className="px-3 py-1.5 hover:text-gray-900 transition-colors rounded hover:bg-gray-100">
-            Admin
+          <Link href="/host" className="px-3 py-1.5 text-[#bb432c] border-b-2 border-[#bb432c] font-semibold">
+            Host a Node
           </Link>
         </nav>
       </header>
@@ -95,45 +95,95 @@ export default function HostPage() {
       <main className="flex-1 max-w-3xl w-full mx-auto px-4 sm:px-6 py-10 space-y-6">
         {/* Title */}
         <div>
-          <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded bg-orange-50 border border-orange-200 text-orange-800 text-xs font-semibold uppercase tracking-wide mb-2">
-            <span>Worker Node Setup</span>
-          </div>
           <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 tracking-tight">
             Register GPU Worker Node
           </h1>
           <p className="text-gray-600 text-sm mt-1">
-            Run a single setup command on your host machine to join the compute mesh. Node discovery, GPU telemetries, and secure container runtimes are fully automated.
+            Run the setup command on your host machine to join the compute mesh. Node discovery, GPU telemetries, and secure container runtimes are fully automated.
           </p>
         </div>
 
-        {/* Network & Security Note */}
-        <div className="bg-white border border-gray-200 rounded-lg p-5 text-xs text-gray-600 space-y-2.5 shadow-xs">
-          <h3 className="font-bold text-gray-900 text-sm">
-            Secure Peer-to-Peer Tunneling
-          </h3>
-          <p className="leading-relaxed">
-            The agent uses <strong>Tailscale WireGuard mesh networking</strong> to establish direct, end-to-end encrypted tunnels through NAT and firewalls (such as university or residential networks) without requiring open router ports.
+        {/* Windows Prerequisites Card */}
+        <div className="bg-white border border-gray-200/80 rounded-xl p-5 shadow-xs space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="font-bold text-gray-900 text-sm flex items-center gap-2">
+              <span>📋 Host Prerequisites</span>
+              <span className="text-[10px] font-semibold uppercase px-2 py-0.5 bg-gray-100 text-gray-700 rounded">
+                Required for Windows
+              </span>
+            </h3>
+          </div>
+          <p className="text-xs text-gray-600 leading-relaxed">
+            Before running the node agent, ensure the following two applications are installed and running on your host machine:
           </p>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+            <a
+              href="https://tailscale.com/download/windows"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-start gap-3 p-3 rounded-lg border border-gray-200 hover:border-[#bb432c]/40 hover:bg-[#bb432c]/5 transition group text-decoration-none"
+            >
+              <div className="w-8 h-8 rounded-lg bg-gray-100 flex items-center justify-center font-bold text-gray-700 text-xs shrink-0 group-hover:bg-[#bb432c] group-hover:text-white transition-colors">
+                1
+              </div>
+              <div className="space-y-0.5">
+                <div className="text-xs font-bold text-gray-900 group-hover:text-[#bb432c] flex items-center gap-1">
+                  Install Tailscale
+                  <span className="text-[10px]">↗</span>
+                </div>
+                <p className="text-[11px] text-gray-500">
+                  Encrypted mesh networking to connect without port forwarding.
+                </p>
+                <span className="text-[10px] text-[#bb432c] font-mono font-medium block">
+                  tailscale.com/download/windows
+                </span>
+              </div>
+            </a>
+
+            <a
+              href="https://www.docker.com/products/docker-desktop/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-start gap-3 p-3 rounded-lg border border-gray-200 hover:border-[#bb432c]/40 hover:bg-[#bb432c]/5 transition group text-decoration-none"
+            >
+              <div className="w-8 h-8 rounded-lg bg-gray-100 flex items-center justify-center font-bold text-gray-700 text-xs shrink-0 group-hover:bg-[#bb432c] group-hover:text-white transition-colors">
+                2
+              </div>
+              <div className="space-y-0.5">
+                <div className="text-xs font-bold text-gray-900 group-hover:text-[#bb432c] flex items-center gap-1">
+                  Install Docker Desktop
+                  <span className="text-[10px]">↗</span>
+                </div>
+                <p className="text-[11px] text-gray-500">
+                  Container runtime with NVIDIA GPU WSL2 acceleration.
+                </p>
+                <span className="text-[10px] text-[#bb432c] font-mono font-medium block">
+                  docker.com/products/docker-desktop
+                </span>
+              </div>
+            </a>
+          </div>
         </div>
 
         {/* Command Box Panel */}
-        <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-xs">
-          <div className="px-5 py-3.5 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
+        <div className="bg-white border border-gray-200/80 rounded-xl overflow-hidden shadow-xs">
+          <div className="px-5 py-3.5 border-b border-gray-200/80 bg-gray-50/80 flex items-center justify-between">
             <span className="font-semibold text-xs uppercase tracking-wider text-gray-700">
               One-Line Installation Script
             </span>
 
             {/* OS switcher */}
-            <div className="flex bg-gray-200/80 p-0.5 rounded text-xs">
+            <div className="flex bg-gray-200/80 p-0.5 rounded-lg text-xs">
               <button
                 onClick={() => setOs('linux')}
-                className={`px-3 py-1 rounded transition font-medium cursor-pointer ${os === 'linux' ? 'bg-white text-gray-900 shadow-xs' : 'text-gray-600 hover:text-gray-900'}`}
+                className={`px-3 py-1 rounded-md transition font-medium cursor-pointer ${os === 'linux' ? 'bg-white text-gray-900 shadow-xs' : 'text-gray-600 hover:text-gray-900'}`}
               >
                 Linux / Mac
               </button>
               <button
                 onClick={() => setOs('windows')}
-                className={`px-3 py-1 rounded transition font-medium cursor-pointer ${os === 'windows' ? 'bg-white text-gray-900 shadow-xs' : 'text-gray-600 hover:text-gray-900'}`}
+                className={`px-3 py-1 rounded-md transition font-medium cursor-pointer ${os === 'windows' ? 'bg-white text-gray-900 shadow-xs' : 'text-gray-600 hover:text-gray-900'}`}
               >
                 Windows (PowerShell)
               </button>
@@ -151,23 +201,23 @@ export default function HostPage() {
 
           {/* Steps summary */}
           <div className="px-5 pb-5 pt-2 border-t border-gray-100">
-            <div className="text-xs font-semibold text-gray-700 uppercase tracking-wider mb-2">Automated Steps:</div>
+            <div className="text-xs font-semibold text-gray-700 uppercase tracking-wider mb-2">Automated Execution Pipeline:</div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-gray-600">
               <div className="flex items-center gap-2">
-                <span className="w-4 h-4 rounded-full bg-orange-100 text-orange-800 text-[10px] flex items-center justify-center font-bold">1</span>
-                <span>Connects to encrypted mesh</span>
+                <span className="w-4 h-4 rounded-full bg-[#bb432c]/10 text-[#bb432c] text-[10px] flex items-center justify-center font-bold">1</span>
+                <span>Connects to encrypted Tailscale mesh</span>
               </div>
               <div className="flex items-center gap-2">
-                <span className="w-4 h-4 rounded-full bg-orange-100 text-orange-800 text-[10px] flex items-center justify-center font-bold">2</span>
-                <span>Installs NVML & Flask runtimes</span>
+                <span className="w-4 h-4 rounded-full bg-[#bb432c]/10 text-[#bb432c] text-[10px] flex items-center justify-center font-bold">2</span>
+                <span>Queries NVML VRAM & CPU metrics</span>
               </div>
               <div className="flex items-center gap-2">
-                <span className="w-4 h-4 rounded-full bg-orange-100 text-orange-800 text-[10px] flex items-center justify-center font-bold">3</span>
-                <span>Configures Docker GPU runtime</span>
+                <span className="w-4 h-4 rounded-full bg-[#bb432c]/10 text-[#bb432c] text-[10px] flex items-center justify-center font-bold">3</span>
+                <span>Attaches Docker GPU container runtime</span>
               </div>
               <div className="flex items-center gap-2">
-                <span className="w-4 h-4 rounded-full bg-orange-100 text-orange-800 text-[10px] flex items-center justify-center font-bold">4</span>
-                <span>Reports capacity heartbeat</span>
+                <span className="w-4 h-4 rounded-full bg-[#bb432c]/10 text-[#bb432c] text-[10px] flex items-center justify-center font-bold">4</span>
+                <span>Sends 3s real-time heartbeat to controller</span>
               </div>
             </div>
           </div>
@@ -217,9 +267,9 @@ export default function HostPage() {
                 <div className="pt-2">
                   <Link
                     href="/"
-                    className="inline-block px-4 py-2 bg-[#F37626] hover:bg-[#d95f0e] text-white text-xs font-semibold rounded shadow-xs transition"
+                    className="inline-block px-4 py-2 bg-[#bb432c] hover:bg-[#9c3622] text-white text-xs font-semibold rounded-lg shadow-xs transition"
                   >
-                    View in Spawner →
+                    View in Rent Page →
                   </Link>
                 </div>
               </div>
@@ -227,6 +277,17 @@ export default function HostPage() {
           </div>
         )}
       </main>
+
+      {/* Clean Footer */}
+      <footer className="border-t border-gray-200/80 bg-white py-6 mt-12 text-center text-xs text-gray-500">
+        <div className="max-w-6xl mx-auto px-4 flex justify-center items-center gap-1.5">
+          <span>Made with</span>
+          <svg className="w-3.5 h-3.5 fill-[#bb432c] inline-block" viewBox="0 0 24 24">
+            <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+          </svg>
+          <span>by IIITS</span>
+        </div>
+      </footer>
     </div>
   )
 }
