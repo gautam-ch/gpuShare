@@ -47,3 +47,5 @@ SYSTEM_ARCHITECTURE.md
 
 
 host-agent/host_config.json
+host-agent/.env
+host-agent/machine_id.txt

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel
@@ -6,10 +6,18 @@ from sqlalchemy.orm import Session
 import datetime
 import uvicorn
 import uuid
-import requests as http_requests
 import os
 import pathlib
 import time
+import asyncio
+from typing import Optional
+
+try:
+    import httpx
+    HTTPX_AVAILABLE = True
+except ImportError:
+    import requests as http_requests
+    HTTPX_AVAILABLE = False
 
 from database import engine, SessionLocal, Base
 import models
@@ -18,12 +26,30 @@ from sqlalchemy import text
 
 app = FastAPI(title="GPU Sharing Backend")
 
+# Restrict CORS to known frontend origins only
+_ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get(
+        "ALLOWED_ORIGINS",
+        "https://gpu-share-three.vercel.app,http://localhost:3000,http://localhost:3001"
+    ).split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Admin API key — set ADMIN_API_KEY env var on Render/Vercel. Defaults to 'changeme' locally.
+ADMIN_API_KEY = os.environ.get("ADMIN_API_KEY", "changeme")
+
+async def verify_admin(x_admin_key: Optional[str] = Header(default=None)):
+    """Dependency that validates the X-Admin-Key header for all /admin/* routes."""
+    if x_admin_key != ADMIN_API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid or missing admin API key")
 
 @app.on_event("startup")
 def startup_db():
@@ -83,10 +109,37 @@ class HeartbeatPayload(BaseModel):
 @app.post("/heartbeat")
 async def receive_heartbeat(payload: HeartbeatPayload, db: Session = Depends(get_db)):
     machine = db.query(models.Machine).filter(models.Machine.id == payload.machine_id).first()
-    
+
+    # BUG-03: Auto-expire stale jobs — if a job has been assigned/running for > 30 min
+    # with no completion signal, the host probably crashed. Restore VRAM and mark error.
+    stale_cutoff = datetime.datetime.utcnow() - datetime.timedelta(minutes=30)
+    stale_jobs = db.query(models.Job).filter(
+        models.Job.machine_id == payload.machine_id,
+        models.Job.status.in_(["assigned", "running"]),
+        models.Job.started_at < stale_cutoff
+    ).all()
+    for stale in stale_jobs:
+        stale.status = "error"
+        print(f"[Backend] Job #{stale.id} marked error — exceeded 30-min TTL with no completion")
+
+    db.flush()  # apply stale fix before computing allocations
+
+    # BUG-01: Calculate VRAM currently consumed by active jobs so heartbeat doesn't
+    # overwrite the allocation and make the node appear available again.
+    active_statuses = ["pending", "assigned", "running"]
+    active_jobs = db.query(models.Job).filter(
+        models.Job.machine_id == payload.machine_id,
+        models.Job.status.in_(active_statuses)
+    ).all()
+    allocated_vram_mb = sum(j.vram_required or 0.0 for j in active_jobs)
+
+    # Effective free VRAM = what GPU reports free minus what is already allocated
+    effective_free_mb = max(0.0, payload.vram_free_mb - allocated_vram_mb)
+
     if machine:
         machine.tailscale_ip = payload.tailscale_ip
-        machine.vram_free_mb = payload.vram_free_mb
+        machine.vram_total_mb = payload.vram_total_mb  # BUG-05: keep total in sync
+        machine.vram_free_mb = effective_free_mb
         machine.cpus = payload.cpus
         machine.shared_ram_gb = payload.shared_ram_gb
         machine.status = payload.status
@@ -96,13 +149,13 @@ async def receive_heartbeat(payload: HeartbeatPayload, db: Session = Depends(get
             id=payload.machine_id,
             tailscale_ip=payload.tailscale_ip,
             vram_total_mb=payload.vram_total_mb,
-            vram_free_mb=payload.vram_free_mb,
+            vram_free_mb=effective_free_mb,
             cpus=payload.cpus,
             shared_ram_gb=payload.shared_ram_gb,
             status=payload.status
         )
         db.add(machine)
-    
+
     # 1. Dispatch PENDING jobs
     pending_jobs = db.query(models.Job).filter(
         models.Job.machine_id == payload.machine_id,
@@ -137,7 +190,7 @@ async def receive_heartbeat(payload: HeartbeatPayload, db: Session = Depends(get
     db.commit()
     return {"status": "success", "jobs": jobs_to_dispatch, "stop_jobs": jobs_to_stop}
 
-from typing import Optional
+
 
 class StopSessionRequest(BaseModel):
     token: str = ""
@@ -171,17 +224,27 @@ async def stop_session(req: StopSessionRequest, db: Session = Depends(get_db)):
 
     db.commit()
 
-    # Instant sub-second agent notification
+    # BUG-08: Notify agent asynchronously — don't block the event loop
     token_to_stop = job.token or ""
-    try:
-        agent_url = f"http://{machine.tailscale_ip if machine and machine.tailscale_ip else '127.0.0.1'}:9000/stop-container"
-        requests.post(agent_url, json={"container_name": f"jupyter-{token_to_stop[:8]}"}, timeout=2)
-    except Exception:
+    agent_ip = machine.tailscale_ip if machine and machine.tailscale_ip else "127.0.0.1"
+    agent_url = f"http://{agent_ip}:9000/stop-container"
+    stop_payload = {"container_name": f"jupyter-{token_to_stop[:8]}"}
+
+    async def _notify_agent():
         try:
-            requests.post("http://127.0.0.1:9000/stop-container", json={"container_name": f"jupyter-{token_to_stop[:8]}"}, timeout=2)
+            if HTTPX_AVAILABLE:
+                async with httpx.AsyncClient(timeout=2.0) as client:
+                    await client.post(agent_url, json=stop_payload)
+            else:
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(
+                    None,
+                    lambda: http_requests.post(agent_url, json=stop_payload, timeout=2)
+                )
         except Exception:
             pass
 
+    asyncio.create_task(_notify_agent())
     return {"status": "success", "message": "Session termination initiated", "job_id": job.id}
 
 class RentRequest(BaseModel):
@@ -295,18 +358,37 @@ async def start_jupyter(req: StartJupyterRequest, db: Session = Depends(get_db))
 
 class CompleteJobPayload(BaseModel):
     job_id: int
-    status: str
-    jupyter_url: str = None
-    detail: str = None
+    status: str  # "running" | "done" | "error"
+    jupyter_url: Optional[str] = None
+    detail: Optional[str] = None
 
 @app.post("/complete-job")
 async def complete_job(payload: CompleteJobPayload, db: Session = Depends(get_db)):
-    """Host agent posts completion result (URL or error) back to backend."""
+    """
+    BUG-02 + BUG-09: Host agent calls this to report job lifecycle transitions:
+      - status="running"  → container is up, tunnel URL is live
+      - status="done"     → Jupyter fully ready (URL confirmed reachable)
+      - status="error"    → launch failed, VRAM must be restored
+    """
     job = db.query(models.Job).filter(models.Job.id == payload.job_id).first()
-    if job:
-        job.status = payload.status
-        job.jupyter_url = payload.jupyter_url if payload.status == "done" else payload.detail
-        db.commit()
+    if not job:
+        return {"status": "not_found"}
+
+    job.status = payload.status
+    if payload.status in ("running", "done") and payload.jupyter_url:
+        job.jupyter_url = payload.jupyter_url
+    elif payload.status == "error" and payload.detail:
+        job.jupyter_url = payload.detail
+
+    # On error: restore VRAM to the machine so it can accept new jobs
+    if payload.status == "error" and job.vram_required:
+        machine = db.query(models.Machine).filter(models.Machine.id == job.machine_id).first()
+        if machine:
+            machine.vram_free_mb = min(
+                machine.vram_total_mb or 4096.0,
+                (machine.vram_free_mb or 0.0) + job.vram_required
+            )
+    db.commit()
     return {"status": "success"}
 
 @app.get("/session-status/{job_id}")
@@ -316,7 +398,8 @@ async def session_status(job_id: str, machine_ip: str = "127.0.0.1", db: Session
         j_id = int(job_id)
         job = db.query(models.Job).filter(models.Job.id == j_id).first()
         if job:
-            if job.status == "done":
+            # BUG-02: surface "running" status so frontend can show intermediate progress
+            if job.status in ("done", "running") and job.jupyter_url:
                 return {"status": "done", "jupyter_url": job.jupyter_url}
             elif job.status == "error":
                 return {"status": "error", "detail": job.jupyter_url or "Failed to launch Jupyter"}
@@ -327,9 +410,16 @@ async def session_status(job_id: str, machine_ip: str = "127.0.0.1", db: Session
 
 @app.get("/machines")
 async def list_machines(db: Session = Depends(get_db)):
-    """Return all registered machines — used by the host page to detect when agent connects."""
+    """
+    BUG-04: Only return machines with a recent heartbeat (last 60s).
+    This prevents old offline machines from falsely triggering the host page
+    "Node connected" check when a new agent hasn't registered yet.
+    """
     cutoff = datetime.datetime.utcnow() - datetime.timedelta(seconds=60)
-    machines = db.query(models.Machine).all()
+    machines = db.query(models.Machine).filter(
+        models.Machine.last_heartbeat >= cutoff,
+        models.Machine.status == "online"
+    ).all()
     return [
         {
             "id": m.id,
@@ -338,7 +428,7 @@ async def list_machines(db: Session = Depends(get_db)):
             "vram_free_mb": m.vram_free_mb,
             "cpus": m.cpus,
             "shared_ram_gb": m.shared_ram_gb or 8.0,
-            "status": m.status if m.last_heartbeat and m.last_heartbeat >= cutoff else "offline",
+            "status": m.status,
             "last_heartbeat": m.last_heartbeat.isoformat() if m.last_heartbeat else None,
         }
         for m in machines
@@ -350,7 +440,7 @@ async def list_machines(db: Session = Depends(get_db)):
 # ---------------------------------------------------------------
 
 @app.get("/admin/machines")
-async def admin_machines(db: Session = Depends(get_db)):
+async def admin_machines(db: Session = Depends(get_db), _: None = Depends(verify_admin)):
     """Admin: return all machines with live/offline status based on heartbeat recency."""
     cutoff = datetime.datetime.utcnow() - datetime.timedelta(seconds=60)
     machines = db.query(models.Machine).all()
@@ -374,7 +464,7 @@ async def admin_machines(db: Session = Depends(get_db)):
 
 
 @app.get("/admin/jobs")
-async def admin_jobs(db: Session = Depends(get_db)):
+async def admin_jobs(db: Session = Depends(get_db), _: None = Depends(verify_admin)):
     """Admin: return all jobs (active and recent) with machine info."""
     jobs = db.query(models.Job).order_by(models.Job.id.desc()).limit(100).all()
     result = []
@@ -398,14 +488,14 @@ async def admin_jobs(db: Session = Depends(get_db)):
 
 
 @app.get("/admin/stats")
-async def admin_stats(db: Session = Depends(get_db)):
+async def admin_stats(db: Session = Depends(get_db), _: None = Depends(verify_admin)):
     """Admin: aggregate platform stats."""
     cutoff = datetime.datetime.utcnow() - datetime.timedelta(seconds=60)
     machines = db.query(models.Machine).all()
     live_machines = [m for m in machines if m.last_heartbeat and m.last_heartbeat >= cutoff]
 
-    active_jobs = db.query(models.Job).filter(models.Job.status.in_(["pending", "assigned", "done"])).all()
-    running_jobs = [j for j in active_jobs if j.status == "done" and j.jupyter_url]
+    active_jobs = db.query(models.Job).filter(models.Job.status.in_(["pending", "assigned", "running", "done"])).all()
+    running_jobs = [j for j in active_jobs if j.status in ("running", "done") and j.jupyter_url]
 
     total_vram = sum(m.vram_total_mb or 0 for m in live_machines)
     free_vram = sum(m.vram_free_mb or 0 for m in live_machines)

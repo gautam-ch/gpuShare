@@ -61,7 +61,7 @@ if os.path.exists(ENV_FILE):
     except Exception as e:
         print(f"[Agent] Note: Failed to read .env file: {e}")
 
-BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8000/heartbeat")
+BACKEND_URL = os.environ.get("BACKEND_URL", "https://provider-app-silk.vercel.app/heartbeat")
 if not BACKEND_URL.endswith("/heartbeat"):
     BACKEND_URL = BACKEND_URL.rstrip("/") + "/heartbeat"
 
@@ -1072,6 +1072,23 @@ if FLASK_AVAILABLE:
         print(f"[Agent] Cloudflare tunnel active on port {port}: {public_url}")
         return public_url
 
+    def _start_cloudflare_with_retry(port: int, token: str = "", machine_ip: str = "127.0.0.1", max_attempts: int = 3) -> str:
+        """
+        BUG-10: Wrap cloudflare tunnel startup with retry logic.
+        Retries up to max_attempts times with 5s backoff before giving up.
+        """
+        last_err = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                url = start_cloudflare_tunnel(port, token=token, machine_ip=machine_ip)
+                return url
+            except Exception as e:
+                last_err = e
+                print(f"[Agent] Cloudflare tunnel attempt {attempt}/{max_attempts} failed: {e}")
+                if attempt < max_attempts:
+                    time.sleep(5)
+        raise RuntimeError(f"Cloudflare tunnel failed after {max_attempts} attempts: {last_err}")
+
     # In-memory job store: job_id -> {"status": "pending|done|error", "public_url": str}
     job_store: dict = {}
 
@@ -1349,14 +1366,26 @@ except Exception:
             if not is_ready:
                 print(f"[Agent] [{job_id}] Warning: Jupyter HTTP ping timed out, starting tunnel anyway...")
 
-            # Start dedicated Cloudflare quick tunnel for this specific pod
-            tunnel_url = start_cloudflare_tunnel(host_port, token=token, machine_ip=machine_ip)
+            # Start dedicated Cloudflare quick tunnel with retry (BUG-10)
+            tunnel_url = _start_cloudflare_with_retry(host_port, token=token, machine_ip=machine_ip)
             public_url = f"{tunnel_url}?token={token}"
+
+            # BUG-09: Report 'running' immediately once tunnel URL is live
+            try:
+                complete_url = BACKEND_URL.replace("/heartbeat", "/complete-job")
+                requests.post(complete_url, json={
+                    "job_id": int(job_id),
+                    "status": "running",
+                    "jupyter_url": public_url
+                }, timeout=5)
+                print(f"[Agent] [{job_id}] Reported 'running' to backend")
+            except Exception as err:
+                print(f"[Agent] Failed to report running status: {err}")
 
             job_store[job_id] = {"status": "done", "public_url": public_url}
             print(f"[Agent] [{job_id}] Pod ready -> {public_url}")
 
-            # Notify central backend of completion
+            # Report 'done' as final confirmed state
             try:
                 complete_url = BACKEND_URL.replace("/heartbeat", "/complete-job")
                 requests.post(complete_url, json={
