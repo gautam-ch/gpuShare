@@ -270,28 +270,22 @@ async def rent_gpu(req: RentRequest, db: Session = Depends(get_db)):
             detail="No GPU provider machines are currently online."
         )
 
-    max_vram_avail = max((m.vram_total_mb or m.vram_free_mb or 0) for m in online_machines) / 1024
+    max_vram_avail = max((m.vram_free_mb or 0) for m in online_machines) / 1024
     max_cpus_avail = max((m.cpus or 4) for m in online_machines)
 
-    # Find best matching machine
+    # Find best matching machine by available free VRAM only.
+    # Do NOT fall back to vram_total_mb — that would allow double-booking
+    # a machine whose free VRAM is already fully allocated.
     machine = db.query(models.Machine).filter(
         models.Machine.status == "online",
         models.Machine.last_heartbeat >= cutoff,
         models.Machine.vram_free_mb >= vram_match_threshold,
     ).first()
 
-    # If strict free VRAM wasn't enough (e.g. from previous tests), match by total VRAM
-    if not machine:
-        machine = db.query(models.Machine).filter(
-            models.Machine.status == "online",
-            models.Machine.last_heartbeat >= cutoff,
-            models.Machine.vram_total_mb >= vram_match_threshold,
-        ).first()
-
     if not machine:
         raise HTTPException(
             status_code=404,
-            detail=f"Requested {req.vram_required:.1f} GB VRAM & {req.cpu_cores} CPUs, but online machines have max {max_vram_avail:.1f} GB VRAM & {max_cpus_avail} CPUs. Try selecting {max_vram_avail:.1f} GB or less."
+            detail=f"Requested {req.vram_required:.1f} GB VRAM & {req.cpu_cores} CPUs, but max available free VRAM is {max_vram_avail:.1f} GB. Try a smaller configuration."
         )
 
     # Validate CPU and RAM against provider's sharing limits
