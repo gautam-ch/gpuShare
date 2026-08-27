@@ -92,7 +92,7 @@ export default function App() {
     setProviderConfig(newConfig)
     try {
       localStorage.setItem('gpushare_provider_config', JSON.stringify(newConfig))
-    } catch {}
+    } catch { }
 
     if (window.providerAPI?.saveProviderConfig) {
       await window.providerAPI.saveProviderConfig(newConfig)
@@ -216,7 +216,7 @@ export default function App() {
             const myNode = machines.find((m) => m.id === currentMachineId) || machines[machines.length - 1]
             let jobs = []
             if (jRes && jRes.ok) {
-              try { jobs = await jRes.json() } catch {}
+              try { jobs = await jRes.json() } catch { }
             }
             setClusterInfo({ connected: true, machine: myNode, activeJobs: jobs })
           }
@@ -390,7 +390,7 @@ export default function App() {
             GPU Share Hub — <strong>Provider Node Agent</strong>
           </span>
           <span className="font-mono text-[11px]">
-            Live Workload Telemetry: Active · JupyterHub PyData Design
+            Live Workload Telemetry: Active · Kintetic PyData Design
           </span>
         </div>
       </footer>

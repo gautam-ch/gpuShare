@@ -1,0 +1,2088 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kinetic — Decentralized GPU Marketplace & Slicing Platform</title>
+
+  <!-- Modern Typography -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap"
+    rel="stylesheet">
+
+  <style>
+    /* ==========================================================================
+       DESIGN SYSTEM & VARIABLES
+       ========================================================================== */
+    :root {
+      --bg-dark: #ffffff;
+      --bg-card: #ffffff;
+      --bg-code: #f8fafc;
+      --border-color: #e2e8f0;
+      --border-hover: rgba(243, 118, 38, 0.4);
+
+      --text-primary: #0f172a;
+      --text-secondary: #475569;
+      --text-muted: #64748b;
+
+      --orange-primary: #f37626;
+      --orange-gradient: linear-gradient(135deg, #ff8c00 0%, #f37626 100%);
+      --teal-primary: #0ea5e9;
+      --teal-gradient: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%);
+      --red-primary: #ef4444;
+      --green-primary: #10b981;
+
+      --transition-smooth: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+      --font-display: 'Outfit', -apple-system, sans-serif;
+      --font-body: 'Inter', -apple-system, sans-serif;
+      --font-mono: 'Fira Code', monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-dark);
+      color: var(--text-primary);
+      font-family: var(--font-body);
+      overflow: hidden;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Background Animation */
+    .bg-mesh {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: -1;
+      opacity: 0.05;
+      background-image:
+        radial-gradient(at 0% 0%, rgba(243, 118, 38, 0.2) 0px, transparent 50%),
+        radial-gradient(at 100% 100%, rgba(14, 165, 233, 0.2) 0px, transparent 50%);
+      pointer-events: none;
+    }
+
+    /* ==========================================================================
+       APP LAYOUT
+       ========================================================================== */
+    header {
+      height: 64px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0 24px;
+      background: #ffffff;
+      backdrop-filter: blur(12px);
+      z-index: 10;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .logo-container {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .logo-icon {
+      width: 32px;
+      height: 32px;
+    }
+
+    .logo-text {
+      font-family: var(--font-display);
+      font-weight: 700;
+      font-size: 20px;
+      letter-spacing: -0.5px;
+      background: linear-gradient(135deg, #0f172a 50%, #f37626 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .header-badge {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      padding: 4px 10px;
+      background: rgba(243, 118, 38, 0.1);
+      border: 1px solid rgba(243, 118, 38, 0.2);
+      color: var(--orange-primary);
+      border-radius: 99px;
+    }
+
+    .main-container {
+      flex: 1;
+      display: flex;
+      position: relative;
+      overflow: hidden;
+    }
+
+    /* Left Sidebar Navigation */
+    .sidebar {
+      width: 280px;
+      border-right: 1px solid var(--border-color);
+      background: #f8fafc;
+      backdrop-filter: blur(8px);
+      display: flex;
+      flex-direction: column;
+      padding: 24px 12px;
+      overflow-y: auto;
+      z-index: 5;
+    }
+
+    .sidebar-title {
+      font-family: var(--font-display);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: var(--text-muted);
+      margin-bottom: 16px;
+      padding-left: 12px;
+    }
+
+    .nav-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      padding: 10px 14px;
+      border-radius: 8px;
+      color: var(--text-secondary);
+      text-decoration: none;
+      font-size: 13.5px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: var(--transition-smooth);
+      border: 1px solid transparent;
+      gap: 10px;
+    }
+
+    .nav-item:hover {
+      background: rgba(0, 0, 0, 0.02);
+      color: var(--text-primary);
+    }
+
+    .nav-item.active {
+      background: rgba(243, 118, 38, 0.08);
+      border-color: rgba(243, 118, 38, 0.2);
+      color: var(--orange-primary);
+      font-weight: 600;
+    }
+
+    .nav-item-num {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      opacity: 0.6;
+    }
+
+    /* ==========================================================================
+       CAROUSEL SYSTEM & SLIDES CONTAINER
+       ========================================================================== */
+    .slides-viewport {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .slides-container {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .slide {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      padding: 40px 60px;
+      opacity: 0;
+      visibility: hidden;
+      transform: translateX(100px);
+      transition: opacity 0.5s ease, transform 0.5s cubic-bezier(0.16, 1, 0.3, 1), visibility 0.5s;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      overflow-y: auto;
+    }
+
+    .slide.active {
+      opacity: 1;
+      visibility: visible;
+      transform: translateX(0);
+    }
+
+    .slide.prev {
+      opacity: 0;
+      visibility: hidden;
+      transform: translateX(-100px);
+    }
+
+    /* Slide Typography */
+    .slide-title-wrap {
+      margin-bottom: 32px;
+    }
+
+    .slide-subtitle {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--teal-primary);
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      margin-bottom: 8px;
+      font-family: var(--font-display);
+    }
+
+    .slide-title {
+      font-family: var(--font-display);
+      font-size: 38px;
+      font-weight: 800;
+      color: var(--text-primary);
+      letter-spacing: -0.5px;
+      line-height: 1.2;
+    }
+
+    .slide-content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      min-height: 0;
+      /* allows flex scrolling child */
+    }
+
+    /* Grid Layouts inside slides */
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 32px;
+      align-items: center;
+    }
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 24px;
+    }
+
+    /* Glass Cards */
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 24px;
+      transition: var(--transition-smooth);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 4px;
+      height: 100%;
+      background: var(--orange-gradient);
+      opacity: 0;
+      transition: var(--transition-smooth);
+    }
+
+    .card:hover {
+      transform: translateY(-4px);
+      border-color: var(--border-hover);
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4);
+    }
+
+    .card:hover::before {
+      opacity: 1;
+    }
+
+    .card-title {
+      font-family: var(--font-display);
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 12px;
+      color: var(--text-primary);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .card-text {
+      color: var(--text-secondary);
+      font-size: 13.5px;
+      line-height: 1.6;
+    }
+
+    .bullet-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      list-style: none;
+    }
+
+    .bullet-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      font-size: 14.5px;
+      line-height: 1.6;
+      color: var(--text-secondary);
+    }
+
+    .bullet-icon {
+      color: var(--orange-primary);
+      font-weight: bold;
+      font-size: 16px;
+      line-height: 1.4;
+    }
+
+    .bullet-item strong {
+      color: var(--text-primary);
+    }
+
+    /* Code Viewer Component */
+    .code-viewer {
+      background-color: var(--bg-code);
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      height: 400px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }
+
+    .code-tabs {
+      background: rgba(0, 0, 0, 0.02);
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+    }
+
+    .code-tab {
+      padding: 12px 20px;
+      color: var(--text-secondary);
+      background: transparent;
+      border: none;
+      border-right: 1px solid var(--border-color);
+      cursor: pointer;
+      font-weight: 500;
+      transition: var(--transition-smooth);
+    }
+
+    .code-tab.active {
+      background: var(--bg-code);
+      color: var(--orange-primary);
+      border-bottom: 2px solid var(--orange-primary);
+    }
+
+    .code-content-panel {
+      flex: 1;
+      padding: 20px;
+      overflow-y: auto;
+      white-space: pre;
+      line-height: 1.5;
+      color: #0f172a;
+    }
+
+    /* Syntax Highlighting */
+    .keyword {
+      color: #0255a5;
+      font-weight: 600;
+    }
+
+    .string {
+      color: #a31515;
+    }
+
+    .comment {
+      color: #008000;
+      font-style: italic;
+    }
+
+    .function {
+      color: #795e26;
+    }
+
+    .number {
+      color: #098658;
+    }
+
+    .decorator {
+      color: #001080;
+    }
+
+    /* Bottom Controls */
+    .controls {
+      height: 60px;
+      border-top: 1px solid var(--border-color);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0 40px;
+      background: #ffffff;
+      z-index: 10;
+    }
+
+    .control-btn {
+      background: rgba(0, 0, 0, 0.02);
+      border: 1px solid var(--border-color);
+      padding: 8px 16px;
+      border-radius: 6px;
+      color: var(--text-primary);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      transition: var(--transition-smooth);
+    }
+
+    .control-btn:hover:not(:disabled) {
+      background: rgba(0, 0, 0, 0.05);
+      border-color: rgba(0, 0, 0, 0.1);
+    }
+
+    .control-btn:disabled {
+      opacity: 0.3;
+      cursor: not-allowed;
+    }
+
+    .play-pause-btn {
+      color: var(--orange-primary);
+      border-color: rgba(243, 118, 38, 0.2);
+    }
+
+    .play-pause-btn:hover {
+      background: rgba(243, 118, 38, 0.08);
+    }
+
+    .progress-bar-container {
+      position: absolute;
+      bottom: 60px;
+      left: 0;
+      width: 100%;
+      height: 3px;
+      background: rgba(0, 0, 0, 0.05);
+      z-index: 10;
+    }
+
+    .progress-bar {
+      height: 100%;
+      width: 10%;
+      background: var(--orange-gradient);
+      transition: width 0.3s ease;
+    }
+
+    .slide-counter {
+      font-size: 13px;
+      font-family: var(--font-mono);
+      color: var(--text-secondary);
+      font-weight: 500;
+    }
+
+    /* Interactive diagram styles */
+    .arch-svg {
+      width: 100%;
+      max-height: 420px;
+    }
+
+    .node-box {
+      cursor: pointer;
+      transition: var(--transition-smooth);
+    }
+
+    .node-box:hover .node-rect {
+      stroke: var(--orange-primary);
+      stroke-width: 2.5px;
+      filter: drop-shadow(0 0 8px rgba(243, 118, 38, 0.4));
+    }
+
+    .node-box:hover .node-text {
+      fill: var(--orange-primary);
+    }
+
+    .diagram-details {
+      background: rgba(0, 0, 0, 0.02);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 16px;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+
+    .diagram-detail-title {
+      font-family: var(--font-display);
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: var(--orange-primary);
+    }
+
+    /* Slide 1 custom design */
+    .title-slide-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      max-width: 800px;
+      margin: 0 auto;
+    }
+
+    .title-badge {
+      margin-bottom: 24px;
+    }
+
+    .title-h1 {
+      font-family: var(--font-display);
+      font-size: 56px;
+      font-weight: 800;
+      line-height: 1.1;
+      letter-spacing: -1.5px;
+      margin-bottom: 16px;
+      background: linear-gradient(135deg, #0f172a 40%, #ff8c00 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .title-desc {
+      font-size: 16px;
+      color: var(--text-secondary);
+      line-height: 1.6;
+      margin-bottom: 40px;
+    }
+
+    .title-meta {
+      display: flex;
+      gap: 32px;
+      font-size: 12px;
+      color: var(--text-muted);
+      border-top: 1px solid var(--border-color);
+      padding-top: 24px;
+      width: 100%;
+      justify-content: center;
+    }
+
+    /* Gauge styles for watchdog slide */
+    .gauges-container {
+      display: flex;
+      gap: 32px;
+      justify-content: center;
+      margin-top: 16px;
+    }
+
+    .gauge-card {
+      width: 160px;
+      text-align: center;
+    }
+
+    .gauge-circle {
+      position: relative;
+      width: 120px;
+      height: 120px;
+      margin: 0 auto 12px;
+    }
+
+    .gauge-circle svg {
+      width: 100%;
+      height: 100%;
+      transform: rotate(-90deg);
+    }
+
+    .gauge-bg {
+      fill: none;
+      stroke: rgba(0, 0, 0, 0.05);
+      stroke-width: 8;
+    }
+
+    .gauge-fill {
+      fill: none;
+      stroke: var(--orange-primary);
+      stroke-width: 8;
+      stroke-linecap: round;
+      stroke-dasharray: 351.8;
+      /* 2 * PI * r = 2 * 3.14 * 56 */
+      transition: stroke-dashoffset 1s ease-out;
+    }
+
+    .gauge-fill-red {
+      stroke: var(--red-primary);
+    }
+
+    .gauge-val {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-family: var(--font-display);
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+
+    .gauge-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    /* Timeline Workflow classes */
+    .timeline {
+      position: relative;
+      margin-top: 20px;
+    }
+
+    .timeline::before {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: 0;
+      width: 100%;
+      height: 2px;
+      background: rgba(0, 0, 0, 0.08);
+      z-index: 1;
+      transform: translateY(-50%);
+    }
+
+    .timeline-steps {
+      display: flex;
+      justify-content: space-between;
+      position: relative;
+      z-index: 2;
+    }
+
+    .timeline-step {
+      width: 140px;
+      text-align: center;
+      background: #ffffff;
+      padding: 0 8px;
+    }
+
+    .timeline-node {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: rgba(0, 0, 0, 0.02);
+      border: 2px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 12px;
+      font-family: var(--font-mono);
+      font-size: 13px;
+      font-weight: bold;
+      color: var(--text-secondary);
+      transition: var(--transition-smooth);
+    }
+
+    .timeline-step:hover .timeline-node {
+      border-color: var(--orange-primary);
+      background: rgba(243, 118, 38, 0.15);
+      color: var(--orange-primary);
+      box-shadow: 0 0 12px rgba(243, 118, 38, 0.4);
+    }
+
+    .timeline-title {
+      font-family: var(--font-display);
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 4px;
+    }
+
+    .timeline-desc {
+      font-size: 11px;
+      color: var(--text-muted);
+      line-height: 1.4;
+    }
+
+    /* Responsive scaling wrapper */
+    .scale-wrapper {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Print Styles for PDF Export */
+    @media print {
+      @page {
+        size: A4 landscape;
+        margin: 0;
+      }
+      body {
+        background-color: #ffffff !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+        overflow: visible !important;
+        height: auto !important;
+      }
+      header, .sidebar, .controls, .progress-bar-container {
+        display: none !important;
+      }
+      .main-container {
+        display: block !important;
+        height: auto !important;
+      }
+      .slides-viewport, .slides-container {
+        display: block !important;
+        position: relative !important;
+        height: auto !important;
+        width: 100% !important;
+      }
+      .slide {
+        position: relative !important;
+        display: flex !important;
+        opacity: 1 !important;
+        visibility: visible !important;
+        transform: none !important;
+        page-break-after: always !important;
+        break-after: page !important;
+        width: 100vw !important;
+        height: 100vh !important;
+        padding: 50px 80px !important;
+        box-sizing: border-box !important;
+        overflow: hidden !important;
+        background-color: #ffffff !important;
+      }
+      .bg-mesh {
+        display: none !important;
+      }
+    }
+  </style>
+</head>
+
+<body>
+
+  <div class="bg-mesh"></div>
+
+  <!-- Header -->
+  <header>
+    <div class="logo-container">
+      <svg class="logo-icon" viewBox="0 0 44 44" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="22" cy="7" r="4" fill="#94a3b8" />
+        <path
+          d="M7.5 22C7.5 13.9919 13.9919 7.5 22 7.5C22.68 7.5 23.3448 7.54707 23.9942 7.63821C16.9209 8.63185 11.5 14.6806 11.5 22C11.5 29.3194 16.9209 35.3681 23.9942 36.3618C23.3448 36.4529 22.68 36.5 22 36.5C13.9919 36.5 7.5 30.0081 7.5 22Z"
+          fill="#F37626" />
+        <circle cx="22" cy="37" r="4" fill="#94a3b8" />
+        <circle cx="34" cy="14" r="3.5" fill="#F37626" />
+        <circle cx="10" cy="30" r="3" fill="#06b6d4" />
+      </svg>
+      <span class="logo-text">Kinetic</span>
+    </div>
+    <div class="header-badge">Project Defense Presentation</div>
+  </header>
+
+  <div class="main-container">
+
+    <!-- Left Navigation Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-title">Slide Navigator</div>
+      <ul class="nav-list" id="navList">
+        <!-- Generated Dynamically -->
+      </ul>
+    </aside>
+
+    <!-- Slide Carousel Viewport -->
+    <main class="slides-viewport">
+      <div class="slides-container" id="slidesContainer">
+
+        <!-- SLIDE 1: Title Slide -->
+        <section class="slide" data-slide-name="Title Slide">
+          <div class="title-slide-container">
+            <div class="title-badge header-badge">Systems & Networks Capstone</div>
+            <h1 class="title-h1">Kinetic — Decentralized Peer-to-Peer GPU Slicing & Sharing Platform</h1>
+            <p class="title-desc">
+              <strong>Kinetic</strong> is an open-mesh computing marketplace enabling local machine learning acceleration by pooling consumer-grade
+              GPU hardware through secure containers, Tailscale overlays, and user-space memory virtualization.
+            </p>
+            <div class="title-meta">
+              <div><strong>Application Name:</strong> Kinetic</div>
+              <div><strong>Project Mentor:</strong> Dr. Bheemappa Halvar</div>
+              <div><strong>Core Stack:</strong> FastAPI, Next.js, Electron, Docker, Tailscale, Cloudflare</div>
+              <div><strong>Project Theme:</strong> Decentralized GPU Clouds</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- SLIDE 2: Problem Statement & Motivation -->
+        <section class="slide" data-slide-name="Motivation & Problems">
+          <div class="slide-title-wrap">
+            <span class="slide-subtitle">02 / The Challenge</span>
+            <h2 class="slide-title">Why Peer-to-Peer GPU Sharing?</h2>
+          </div>
+          <div class="slide-content">
+            <div class="grid-3">
+              <div class="card">
+                <div class="card-title">
+                  <span style="color:var(--orange-primary)">01.</span> Cloud Monopoly & Cost
+                </div>
+                <p class="card-text">
+                  Enterprise GPU cloud providers (AWS, GCP) maintain high pricing premiums, making multi-gigabyte VRAM
+                  allocations inaccessible for individual researchers, college students, and bootstrap startups.
+                </p>
+              </div>
+              <div class="card">
+                <div class="card-title">
+                  <span style="color:var(--teal-primary)">02.</span> Underutilized Hardware
+                </div>
+                <p class="card-text">
+                  Consumer PCs running high-tier RTX series GPUs remain idle up to 85% of the day. There is no
+                  off-the-shelf mechanism to monetize or share these isolated resources.
+                </p>
+              </div>
+              <div class="card">
+                <div class="card-title">
+                  <span style="color:var(--orange-primary)">03.</span> Slicing & Network Barriers
+                </div>
+                <p class="card-text">
+                  NVIDIA restricts hardware GPU Slicing (vGPU/MIG) to enterprise cards (A100/H100). Consumer cards lack
+                  hardware virtualization, and local hosts are trapped behind strict home routers/NATs.
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- SLIDE 3: System Architecture -->
+        <section class="slide" data-slide-name="System Architecture">
+          <div class="slide-title-wrap">
+            <span class="slide-subtitle">03 / Platform Design</span>
+            <h2 class="slide-title">System Architecture Overview</h2>
+          </div>
+          <div class="slide-content">
+            <div class="grid-2">
+              <div>
+                <!-- Interactive SVG Flowchart -->
+                <svg class="arch-svg" viewBox="0 0 540 380" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <!-- Connectors -->
+                  <path d="M70 120 H180" stroke="#64748b" stroke-width="2" stroke-dasharray="4 4" />
+                  <path d="M125 120 V250 H180" stroke="#64748b" stroke-width="2" stroke-dasharray="4 4" />
+                  <path d="M260 120 H380" stroke="var(--orange-primary)" stroke-width="2" />
+                  <path d="M260 250 H380" stroke="var(--teal-primary)" stroke-width="2" />
+                  <path d="M430 145 V225" stroke="var(--orange-primary)" stroke-width="2" stroke-dasharray="4 4" />
+                  <path d="M430 275 V305 H70 V145" stroke="var(--teal-primary)" stroke-width="2" />
+
+                  <!-- Interactive Node 1: Renter -->
+                  <g class="node-box" onclick="showArchDetail('renter')">
+                    <rect class="node-rect" x="20" y="95" width="100" height="50" rx="8" fill="var(--bg-card)"
+                      stroke="var(--border-color)" stroke-width="1.5" />
+                    <text class="node-text" x="70" y="125" fill="var(--text-primary)" font-size="12" font-weight="600"
+                      text-anchor="middle">Renter UI</text>
+                  </g>
+
+                  <!-- Interactive Node 2: Portal -->
+                  <g class="node-box" onclick="showArchDetail('portal')">
+                    <rect class="node-rect" x="180" y="95" width="80" height="50" rx="8" fill="var(--bg-card)"
+                      stroke="var(--border-color)" stroke-width="1.5" />
+                    <text class="node-text" x="220" y="125" fill="var(--text-primary)" font-size="11" font-weight="600"
+                      text-anchor="middle">FastAPI Hub</text>
+                  </g>
+
+                  <!-- Interactive Node 3: Tailscale -->
+                  <g class="node-box" onclick="showArchDetail('tailscale')">
+                    <rect class="node-rect" x="380" y="95" width="100" height="50" rx="8" fill="var(--bg-card)"
+                      stroke="var(--border-color)" stroke-width="1.5" />
+                    <text class="node-text" x="430" y="125" fill="var(--text-primary)" font-size="11" font-weight="600"
+                      text-anchor="middle">Tailscale VPN</text>
+                  </g>
+
+                  <!-- Interactive Node 4: Provider -->
+                  <g class="node-box" onclick="showArchDetail('provider')">
+                    <rect class="node-rect" x="180" y="225" width="80" height="50" rx="8" fill="var(--bg-card)"
+                      stroke="var(--border-color)" stroke-width="1.5" />
+                    <text class="node-text" x="220" y="255" fill="var(--text-primary)" font-size="11" font-weight="600"
+                      text-anchor="middle">Host Agent</text>
+                  </g>
+
+                  <!-- Interactive Node 5: Docker -->
+                  <g class="node-box" onclick="showArchDetail('docker')">
+                    <rect class="node-rect" x="380" y="225" width="100" height="50" rx="8" fill="var(--bg-card)"
+                      stroke="var(--border-color)" stroke-width="1.5" />
+                    <text class="node-text" x="430" y="255" fill="var(--text-primary)" font-size="11" font-weight="600"
+                      text-anchor="middle">Docker Sandbox</text>
+                  </g>
+
+                  <!-- Label markings -->
+                  <text x="320" y="110" fill="var(--orange-primary)" font-size="9" text-anchor="middle">Control
+                    Mesh</text>
+                  <text x="320" y="242" fill="var(--teal-primary)" font-size="9" text-anchor="middle">Wireguard
+                    Tun</text>
+                </svg>
+                <div style="font-size:11px; color:var(--text-muted); text-align:center; margin-top:8px;">* Click on
+                  nodes in the diagram to inspect component functions.</div>
+              </div>
+              <div>
+                <div class="diagram-details" id="diagramDetailBox">
+                  <div class="diagram-detail-title">System Components</div>
+                  <p class="card-text" id="diagramDetailText">
+                    This P2P platform splits the controlplane (orchestration, heartbeat checks, spawner matching) from
+                    the dataplane (tunnels, sandbox isolation). Select any card component to view its mechanics.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- SLIDE 4: Core Innovation - User-space GPU Slicing -->
+        <section class="slide" data-slide-name="GPU Slicing Innovation">
+          <div class="slide-title-wrap">
+            <span class="slide-subtitle">04 / Core Innovation</span>
+            <h2 class="slide-title">Software-Defined GPU Slicing</h2>
+          </div>
+          <div class="slide-content">
+            <div class="grid-2">
+              <div class="bullet-list">
+                <li class="bullet-item">
+                  <span class="bullet-icon">→</span>
+                  <div>
+                    <strong>User-Space Interception</strong><br>
+                    Injects <a href="file:///c:/Users/monua/Desktop/gpuShare/host-agent/gpushare_mount/sitecustomize.py"
+                      style="color:var(--orange-primary); text-decoration:none">sitecustomize.py</a> inside the
+                    container system path, intercepting model training packages (`torch`, `tensorflow`) instantly on
+                    import.
+                  </div>
+                </li>
+                <li class="bullet-item">
+                  <span class="bullet-icon">→</span>
+                  <div>
+                    <strong>Fractional VRAM Allocation</strong><br>
+                    Limits PyTorch allocations dynamically via `torch.cuda.set_per_process_memory_fraction()`, forcing
+                    memory caps on RTX cards without needing MIG hardware.
+                  </div>
+                </li>
+                <li class="bullet-item">
+                  <span class="bullet-icon">→</span>
+                  <div>
+                    <strong>Dual-path Telemetry Fallback</strong><br>
+                    Saves process usage inside the container to `/tmp/gpushare_usage_*.json` to bypass container
+                    boundaries, serving telemetry directly to the host watchdog daemon.
+                  </div>
+                </li>
+              </div>
+              <div class="code-viewer">
+                <div class="code-tabs">
+                  <button class="code-tab active" onclick="switchCode('slicing')">sitecustomize.py</button>
+                  <button class="code-tab" onclick="switchCode('watchdog')">watchdog.py</button>
+                </div>
+                <div class="code-content-panel" id="codePanel">
+                  <!-- Code Snippet Inject -->
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- SLIDE 5: Hub Backend Orchestration -->
+        <section class="slide" data-slide-name="FastAPI Backend">
+          <div class="slide-title-wrap">
+            <span class="slide-subtitle">05 / Control Plane</span>
+            <h2 class="slide-title">FastAPI Hub & Matchmaker</h2>
+          </div>
+          <div class="slide-content">
+            <div class="grid-2">
+              <div class="bullet-list">
+                <li class="bullet-item">
+                  <span class="bullet-icon">✓</span>
+                  <div>
+                    <strong>Capability Matchmaking</strong><br>
+                    Matches renter specifications (VRAM, CPU cores, RAM limits) against live providers, allowing a VRAM
+                    match threshold to account for host display overhead (~300MB).
+                  </div>
+                </li>
+                <li class="bullet-item">
+                  <span class="bullet-icon">✓</span>
+                  <div>
+                    <strong>Dynamic Installer Scripts</strong><br>
+                    Generates customized scripts (`/install-script`, `/install-script-windows`) injecting a single-use
+                    Tailscale AuthKey. Automates setup via curl/PowerShell pipes.
+                  </div>
+                </li>
+                <li class="bullet-item">
+                  <span class="bullet-icon">✓</span>
+                  <div>
+                    <strong>Dual Database Support</strong><br>
+                    Supports lightweight local SQLite migrations for developer environments and auto-detects Railway
+                    PostgreSQL connection strings for production.
+                  </div>
+                </li>
+              </div>
+              <div class="card">
+                <div class="card-title">Matchmaking Logic Snippet</div>
+                <pre
+                  style="font-family:var(--font-mono); font-size:11px; line-height:1.4; color:#9cdcfe; margin-top:8px;">
+<span class="keyword">def</span> <span class="function">rent_gpu</span>(db, vram_required):
+    vram_mb = vram_required * <span class="number">1024</span>
+    <span class="comment"># Match threshold: allow 15% tolerance</span>
+    vram_match_threshold = max(vram_mb - <span class="number">512</span>, vram_mb * <span class="number">0.85</span>)
+    
+    <span class="comment"># Filter active, online machines</span>
+    machine = db.query(Machine).filter(
+        Machine.status == <span class="string">"online"</span>,
+        Machine.vram_free_mb >= vram_match_threshold
+    ).first()
+    <span class="keyword">return</span> machine</pre>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- SLIDE 6: Host Agent & Safeguards -->
+        <section class="slide" data-slide-name="Host Safeguards">
+          <div class="slide-title-wrap">
+            <span class="slide-subtitle">06 / Hardware Security</span>
+            <h2 class="slide-title">Host Agent & Safeguards</h2>
+          </div>
+          <div class="slide-content">
+            <div class="grid-2">
+              <div class="bullet-list">
+                <li class="bullet-item">
+                  <span class="bullet-icon">⚠</span>
+                  <div>
+                    <strong>Thermal Guard Safeguard</strong><br>
+                    Watchdog loop polls GPU metrics continuously. Automatically halts all containers and tunnels if GPU
+                    temperature triggers safety limits (≥ 88°C).
+                  </div>
+                </li>
+                <li class="bullet-item">
+                  <span class="bullet-icon">⚠</span>
+                  <div>
+                    <strong>System Memory Recovery</strong><br>
+                    Halts renter pods and releases host memory reserves if host RAM utilization pins at 96% for 3
+                    consecutive sweeps.
+                  </div>
+                </li>
+                <li class="bullet-item">
+                  <span class="bullet-icon">⚠</span>
+                  <div>
+                    <strong>Cgroup CPU/RAM Enforcements</strong><br>
+                    Caps renter usage parameters inside Docker. Kills violating sub-processes utilizing standard host
+                    kernel `SIGKILL` commands.
+                  </div>
+                </li>
+              </div>
+              <div class="card">
+                <div class="card-title" style="justify-content:center;">Safety Trigger Limits</div>
+                <div class="gauges-container">
+                  <div class="gauge-card">
+                    <div class="gauge-circle">
+                      <svg>
+                        <circle class="gauge-bg" cx="60" cy="60" r="50"></circle>
+                        <circle class="gauge-fill gauge-fill-red" cx="60" cy="60" r="50" style="stroke-dashoffset: 77;">
+                        </circle> <!-- 78% -->
+                      </svg>
+                      <div class="gauge-val">88°C</div>
+                    </div>
+                    <div class="gauge-label">GPU Thermal Cap</div>
+                  </div>
+                  <div class="gauge-card">
+                    <div class="gauge-circle">
+                      <svg>
+                        <circle class="gauge-bg" cx="60" cy="60" r="50"></circle>
+                        <circle class="gauge-fill gauge-fill-red" cx="60" cy="60" r="50" style="stroke-dashoffset: 14;">
+                        </circle> <!-- 96% -->
+                      </svg>
+                      <div class="gauge-val">96%</div>
+                    </div>
+                    <div class="gauge-label">Host RAM Cap</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- SLIDE 7: Zero-Config Networking -->
+        <section class="slide" data-slide-name="Networking">
+          <div class="slide-title-wrap">
+            <span class="slide-subtitle">07 / Connectivity Mesh</span>
+            <h2 class="slide-title">Zero-Config Networking Flow</h2>
+          </div>
+          <div class="slide-content">
+            <div class="grid-2">
+              <div class="card">
+                <div class="card-title" style="color:var(--orange-primary)">Control Plane (Hub ↔ Host)</div>
+                <p class="card-text" style="margin-bottom:16px;">
+                  Secured via <strong>Tailscale VPN Overlay Mesh</strong>.
+                </p>
+                <div class="bullet-list" style="gap:8px;">
+                  <li class="bullet-item">
+                    <span class="bullet-icon">▪</span>
+                    Host executes script, authenticates without browser, joins private Tailnet.
+                  </li>
+                  <li class="bullet-item">
+                    <span class="bullet-icon">▪</span>
+                    Hub queries health and dispatches workloads using private 100.x.x.x IP channels.
+                  </li>
+                  <li class="bullet-item">
+                    <span class="bullet-icon">▪</span>
+                    No open router ports, firewall edits, or static DNS configuration required.
+                  </li>
+                </div>
+              </div>
+              <div class="card">
+                <div class="card-title" style="color:var(--teal-primary)">Data Plane (Renter ↔ Container)</div>
+                <p class="card-text" style="margin-bottom:16px;">
+                  Routed via <strong>Cloudflare Quick Tunnels</strong>.
+                </p>
+                <div class="bullet-list" style="gap:8px;">
+                  <li class="bullet-item">
+                    <span class="bullet-icon">▪</span>
+                    Host starts Jupyter Notebook, then binds local proxy tunnel using `cloudflared`.
+                  </li>
+                  <li class="bullet-item">
+                    <span class="bullet-icon">▪</span>
+                    Cloudflare provides a public ephemeral URL (e.g. `*.trycloudflare.com`).
+                  </li>
+                  <li class="bullet-item">
+                    <span class="bullet-icon">▪</span>
+                    Renters access Jupyter Lab directly via HTTPS without installing Tailscale.
+                  </li>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- SLIDE 8: UI Dashboard Showcase -->
+        <section class="slide" data-slide-name="UI & Dashboards">
+          <div class="slide-title-wrap">
+            <span class="slide-subtitle">08 / Visual Interfaces</span>
+            <h2 class="slide-title">UI Dashboard Layouts</h2>
+          </div>
+          <div class="slide-content">
+            <div class="grid-3">
+              <div class="card">
+                <div class="card-title">Next.js Marketplace</div>
+                <p class="card-text" style="margin-bottom:12px;">
+                  Allows renters to spawn Jupyter nodes. Features parameters customization sliders and active loading
+                  progress tracking log updates.
+                </p>
+                <div
+                  style="font-size:11px; color:var(--text-muted); border-top:1px solid var(--border-color); padding-top:8px;">
+                  Files: <a href="file:///c:/Users/monua/Desktop/gpuShare/frontend/src/app/page.tsx"
+                    style="color:var(--orange-primary); text-decoration:none;">page.tsx</a>, RentForm.tsx
+                </div>
+              </div>
+              <div class="card">
+                <div class="card-title">Electron Provider GUI</div>
+                <p class="card-text" style="margin-bottom:12px;">
+                  Provides native host desktop controls. Displays radial gauges for VRAM, CPU utilization, active renter
+                  parameters, and host temperature.
+                </p>
+                <div
+                  style="font-size:11px; color:var(--text-muted); border-top:1px solid var(--border-color); padding-top:8px;">
+                  Files: <a href="file:///c:/Users/monua/Desktop/gpuShare/provider-app/src/App.jsx"
+                    style="color:var(--orange-primary); text-decoration:none;">App.jsx</a>, GpuUsageCard.jsx
+                </div>
+              </div>
+              <div class="card">
+                <div class="card-title">Admin Dashboard</div>
+                <p class="card-text" style="margin-bottom:12px;">
+                  Aggregates total active hosts, current rental load, total pooled platform VRAM, and platform-wide
+                  telemetry diagnostics.
+                </p>
+                <div
+                  style="font-size:11px; color:var(--text-muted); border-top:1px solid var(--border-color); padding-top:8px;">
+                  Files: Next.js /admin panel
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- SLIDE 9: Complete Core Workflows -->
+        <section class="slide" data-slide-name="Core Workflows">
+          <div class="slide-title-wrap">
+            <span class="slide-subtitle">09 / System Lifecycle</span>
+            <h2 class="slide-title">Rental Spawner Workflow</h2>
+          </div>
+          <div class="slide-content">
+            <div class="timeline">
+              <div class="timeline-steps">
+                <div class="timeline-step">
+                  <div class="timeline-node">1</div>
+                  <div class="timeline-title">Heartbeat & Match</div>
+                  <div class="timeline-desc">Host registers capabilities. Renter requests resources, Hub matches
+                    machine.</div>
+                </div>
+                <div class="timeline-step">
+                  <div class="timeline-node">2</div>
+                  <div class="timeline-title">Container Start</div>
+                  <div class="timeline-desc">Host maps volume mounts and starts Jupyter container with hard CPU/RAM
+                    cgroup limits.</div>
+                </div>
+                <div class="timeline-step">
+                  <div class="timeline-node">3</div>
+                  <div class="timeline-title">Limits Injected</div>
+                  <div class="timeline-desc">sitecustomize.py intercepts imports, setting limits dynamically.</div>
+                </div>
+                <div class="timeline-step">
+                  <div class="timeline-node">4</div>
+                  <div class="timeline-title">Tunnel Active</div>
+                  <div class="timeline-desc">Host starts cloudflared, returns ephemeral public URL to Hub for Renter
+                    routing.</div>
+                </div>
+                <div class="timeline-step">
+                  <div class="timeline-node">5</div>
+                  <div class="timeline-title">Watchdog & Exit</div>
+                  <div class="timeline-desc">Host guards limits. User ends rental, Host terminates container, freeing
+                    hardware.</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- SLIDE 10: Conclusion & Future Scope -->
+        <section class="slide" data-slide-name="Conclusion">
+          <div class="slide-title-wrap">
+            <span class="slide-subtitle">10 / Summary</span>
+            <h2 class="slide-title">Conclusion & Future Research</h2>
+          </div>
+          <div class="slide-content">
+            <div class="grid-2">
+              <div class="card">
+                <div class="card-title">Key Platform Achievements</div>
+                <div class="bullet-list" style="margin-top:12px;">
+                  <li class="bullet-item">
+                    <span class="bullet-icon">✓</span>
+                    <div>
+                      <strong>Consumer-grade Compatibility</strong><br>
+                      Allows ordinary local hosts to share home gaming GPUs securely.
+                    </div>
+                  </li>
+                  <li class="bullet-item">
+                    <span class="bullet-icon">✓</span>
+                    <div>
+                      <strong>Sub-20s Sandbox Spawns</strong><br>
+                      Fast image caching and quick tunnels bypass heavy VM startup delays.
+                    </div>
+                  </li>
+                  <li class="bullet-item">
+                    <span class="bullet-icon">✓</span>
+                    <div>
+                      <strong>Robust User Guarding</strong><br>
+                      Dual watchdog thermal and memory safeguards protect host PCs.
+                    </div>
+                  </li>
+                </div>
+              </div>
+              <div class="card">
+                <div class="card-title">Future Expansion Directions</div>
+                <div class="bullet-list" style="margin-top:12px;">
+                  <li class="bullet-item">
+                    <span class="bullet-icon">→</span>
+                    <div>
+                      <strong>Multi-GPU Slicing & Clustering</strong><br>
+                      Orchestrating distributed training jobs across multiple P2P nodes.
+                    </div>
+                  </li>
+                  <li class="bullet-item">
+                    <span class="bullet-icon">→</span>
+                    <div>
+                      <strong>Automated Hardware Benchmark</strong><br>
+                      Testing node speed dynamically before registration to compute fair pricing.
+                    </div>
+                  </li>
+                  <li class="bullet-item">
+                    <span class="bullet-icon">→</span>
+                    <div>
+                      <strong>Decentralized Smart Payments</strong><br>
+                      Enabling zero-trust rental payouts via automated blockchain contracts.
+                    </div>
+                  </li>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- SLIDE 11: Kinetic Renter Marketplace UI -->
+        <section class="slide" data-slide-name="Renter Marketplace UI">
+          <div class="slide-title-wrap">
+            <span class="slide-subtitle">11 / User Interface — Renter Side</span>
+            <h2 class="slide-title">Kinetic: GPU Marketplace & Workload Profiles</h2>
+          </div>
+          <div class="slide-content">
+            <div class="grid-2" style="align-items:start; gap:28px;">
+              <div>
+                <div style="border:1px solid var(--border-color); border-radius:12px; overflow:hidden; background:#fff; box-shadow:0 4px 24px rgba(0,0,0,0.07);">
+                  <div style="display:flex; align-items:center; justify-content:space-between; padding:10px 18px; border-bottom:1px solid var(--border-color); background:#fff;">
+                    <div style="display:flex; align-items:center; gap:8px;">
+                      <div style="width:22px;height:22px;background:var(--orange-primary);border-radius:5px;display:flex;align-items:center;justify-content:center;">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M4 6L12 2L20 6V12C20 16.4 16.4 20.4 12 22C7.6 20.4 4 16.4 4 12V6Z" fill="white"/></svg>
+                      </div>
+                      <span style="font-weight:700; font-size:13px; color:#111;">Kinetic</span>
+                    </div>
+                    <div style="display:flex; gap:20px;">
+                      <span style="font-size:11px; font-weight:600; color:var(--orange-primary); border-bottom:2px solid var(--orange-primary); padding-bottom:2px;">Rent GPU</span>
+                      <span style="font-size:11px; color:#888;">Workspace</span>
+                      <span style="font-size:11px; color:#888;">Host a Node</span>
+                    </div>
+                  </div>
+                  <div style="padding:16px 18px;">
+                    <h3 style="font-size:16px; font-weight:800; color:#111; margin-bottom:4px;">Rent GPU Environment</h3>
+                    <p style="font-size:10px; color:#888; margin-bottom:14px;">Select your workload profile or customise dedicated compute resources for your JupyterLab workspace.</p>
+                    <div style="font-size:9px; font-weight:700; letter-spacing:1.5px; color:#aaa; margin-bottom:8px;">1. CHOOSE WORKLOAD PROFILE</div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-bottom:14px;">
+                      <div style="border:1px solid var(--border-color); border-radius:8px; padding:10px;">
+                        <div style="font-size:10px; font-weight:700; color:#111; margin-bottom:4px;">Intro ML & Data Science</div>
+                        <div style="font-size:8px; background:#f1f5f9; color:#475569; padding:2px 6px; border-radius:4px; display:inline-block; margin-bottom:6px;">Standard Tier</div>
+                        <div style="font-size:8.5px; color:#666; margin-bottom:8px; line-height:1.4;">Lightweight experimentation, Pandas/NumPy, Scikit-learn & basic PyTorch.</div>
+                        <div style="display:flex; gap:10px; font-size:8px; color:#555; font-weight:600;"><span style="color:var(--orange-primary);">2 GB VRAM</span><span>2 CPUs</span><span>4 GB RAM</span></div>
+                      </div>
+                      <div style="border:2px solid var(--orange-primary); border-radius:8px; padding:10px; background:rgba(243,118,38,0.03);">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                          <div style="font-size:10px; font-weight:700; color:#111;">Computer Vision & CNNs</div>
+                          <div style="width:10px; height:10px; border-radius:50%; background:var(--orange-primary);"></div>
+                        </div>
+                        <div style="font-size:8px; background:rgba(243,118,38,0.1); color:var(--orange-primary); padding:2px 6px; border-radius:4px; display:inline-block; margin-bottom:6px;">Recommended</div>
+                        <div style="font-size:8.5px; color:#666; margin-bottom:8px; line-height:1.4;">Image classification, object detection (YOLO), PyTorch training pipelines.</div>
+                        <div style="display:flex; gap:10px; font-size:8px; color:#555; font-weight:600;"><span style="color:var(--orange-primary);">4 GB VRAM</span><span>4 CPUs</span><span>8 GB RAM</span></div>
+                      </div>
+                      <div style="border:1px solid var(--border-color); border-radius:8px; padding:10px;">
+                        <div style="font-size:10px; font-weight:700; color:#111; margin-bottom:4px;">Deep Learning & GenAI</div>
+                        <div style="font-size:8px; background:#fef3c7; color:#92400e; padding:2px 6px; border-radius:4px; display:inline-block; margin-bottom:6px;">High Performance</div>
+                        <div style="font-size:8.5px; color:#666; margin-bottom:8px; line-height:1.4;">Transformers, Stable Diffusion, Whisper speech, LoRA fine-tuning.</div>
+                        <div style="display:flex; gap:10px; font-size:8px; color:#555; font-weight:600;"><span style="color:var(--orange-primary);">8 GB VRAM</span><span>6 CPUs</span><span>16 GB RAM</span></div>
+                      </div>
+                    </div>
+                    <div style="font-size:9px; font-weight:700; letter-spacing:1.5px; color:#aaa; margin-bottom:8px;">2. CUSTOM HARDWARE CONFIGURATION</div>
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                      <span style="font-size:10px; font-weight:600; color:#333;">GPU Memory (VRAM)</span>
+                      <span style="font-size:10px; font-weight:700; background:#111; color:#fff; padding:2px 8px; border-radius:5px;">4 GB</span>
+                    </div>
+                    <div style="display:grid; grid-template-columns:repeat(6,1fr); gap:4px; margin-bottom:10px;">
+                      <div style="text-align:center; padding:5px; border:1px solid var(--border-color); border-radius:6px; font-size:9px; color:#555;">1 GB</div>
+                      <div style="text-align:center; padding:5px; border:1px solid var(--border-color); border-radius:6px; font-size:9px; color:#555;">2 GB</div>
+                      <div style="text-align:center; padding:5px; background:var(--orange-primary); color:#fff; border-radius:6px; font-size:9px; font-weight:700;">4 GB</div>
+                      <div style="text-align:center; padding:5px; border:1px solid var(--border-color); border-radius:6px; font-size:9px; color:#555;">6 GB</div>
+                      <div style="text-align:center; padding:5px; border:1px solid var(--border-color); border-radius:6px; font-size:9px; color:#555;">8 GB</div>
+                      <div style="text-align:center; padding:5px; border:1px solid var(--border-color); border-radius:6px; font-size:9px; color:#555;">12 GB</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="bullet-list" style="gap:20px;">
+                <li class="bullet-item">
+                  <span class="bullet-icon" style="color:var(--orange-primary);">▶</span>
+                  <div>
+                    <strong>Three Workload Profiles</strong><br>
+                    <em>Standard Tier</em> (2GB VRAM) for ML basics, <em>Recommended</em> (4GB VRAM) for CV/CNNs, and
+                    <em>High Performance</em> (8GB VRAM) for LLM/GenAI fine-tuning. Each pre-fills the custom hardware sliders.
+                  </div>
+                </li>
+                <li class="bullet-item">
+                  <span class="bullet-icon" style="color:var(--teal-primary);">▶</span>
+                  <div>
+                    <strong>Custom Hardware Configuration</strong><br>
+                    Independent sliders for VRAM (1–12 GB), CPU cores (1–8), and RAM (2–32 GB). Values passed directly
+                    to <code style="font-family:var(--font-mono); font-size:11px;">POST /rent</code> on the FastAPI Hub.
+                  </div>
+                </li>
+                <li class="bullet-item">
+                  <span class="bullet-icon" style="color:var(--orange-primary);">▶</span>
+                  <div>
+                    <strong>Live Node Availability Indicator</strong><br>
+                    Top-right badge shows live count of matching provider nodes and their max free VRAM, refreshed
+                    on component mount via <code style="font-family:var(--font-mono);font-size:11px;">GET /admin/machines</code>.
+                  </div>
+                </li>
+                <li class="bullet-item">
+                  <span class="bullet-icon" style="color:var(--teal-primary);">▶</span>
+                  <div>
+                    <strong>Animated Log Stream on Spawn</strong><br>
+                    Once the renter clicks "Spawn Environment", the UI switches to a live log stream that prints Docker
+                    pull &rarr; container start &rarr; tunnel URL steps in real time before opening JupyterLab.
+                  </div>
+                </li>
+                <li class="bullet-item">
+                  <span class="bullet-icon" style="color:var(--orange-primary);">▶</span>
+                  <div>
+                    <strong>Tech: Next.js 14 App Router + TypeScript</strong><br>
+                    <code style="font-family:var(--font-mono); font-size:10px;">frontend/src/app/page.tsx</code> ·
+                    <code style="font-family:var(--font-mono); font-size:10px;">components/RentForm.tsx</code> ·
+                    Deployed on Vercel (zero-config CI/CD).
+                  </div>
+                </li>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- SLIDE 12: Kinetic Provider Node Dashboard -->
+        <section class="slide" data-slide-name="Provider Dashboard UI">
+          <div class="slide-title-wrap">
+            <span class="slide-subtitle">12 / User Interface — Provider Side</span>
+            <h2 class="slide-title">Kinetic: Provider Node Monitoring Dashboard</h2>
+          </div>
+          <div class="slide-content">
+            <div class="grid-2" style="align-items:start; gap:24px;">
+              <div>
+                <div style="border:1px solid var(--border-color); border-radius:10px; overflow:hidden; background:#fff; box-shadow:0 4px 20px rgba(0,0,0,0.06); font-size:10px;">
+                  <div style="display:flex; align-items:center; gap:10px; padding:8px 14px; border-bottom:1px solid var(--border-color);">
+                    <div style="width:18px;height:18px;background:var(--orange-primary);border-radius:4px;display:flex;align-items:center;justify-content:center;"><svg width="10" height="10" viewBox="0 0 24 24" fill="none"><path d="M4 6L12 2L20 6V12C20 16.4 16.4 20.4 12 22C7.6 20.4 4 16.4 4 12V6Z" fill="white"/></svg></div>
+                    <div>
+                      <div style="font-weight:700; font-size:11px; color:#111;">Kinetic <span style="background:rgba(249,115,22,0.1); color:var(--orange-primary); font-size:9px; padding:1px 6px; border-radius:4px; border:1px solid rgba(249,115,22,0.2);">Provider Node</span></div>
+                      <div style="font-size:8px; color:#888;">Real-time GPU compute & workload monitoring</div>
+                    </div>
+                    <div style="margin-left:auto; display:flex; gap:6px; align-items:center;">
+                      <span style="font-size:8px; background:#f1f5f9; padding:3px 7px; border-radius:4px; color:#555;">NODE ID: <strong>node-bf550f</strong></span>
+                      <span style="font-size:8px; background:#f1f5f9; padding:3px 7px; border-radius:4px; color:#555;">MESH IP: <strong>100.79.121.92</strong></span>
+                      <span style="font-size:8px; color:#10b981; font-weight:600;">● Agent Active</span>
+                    </div>
+                  </div>
+                  <div style="padding:8px 14px; background:#f8fafc; border-bottom:1px solid var(--border-color); display:flex; justify-content:space-between; align-items:center;">
+                    <div>
+                      <div style="display:flex; align-items:center; gap:6px; margin-bottom:2px;">
+                        <span style="font-size:8px; font-weight:700; color:#555; letter-spacing:1px;">ACTIVE SHARING ALLOCATION</span>
+                        <span style="font-size:7px; background:#d1fae5; color:#065f46; padding:1px 5px; border-radius:3px; font-weight:600;">CAP ENFORCED</span>
+                      </div>
+                      <div style="font-size:11px; font-weight:700; color:#111;">2 GB VRAM Max &nbsp;·&nbsp; 2 CPU Cores &nbsp;·&nbsp; 4 GB RAM</div>
+                      <div style="font-size:8px; color:#888; margin-top:1px;">Renters cannot exceed these caps. All other hardware remains private.</div>
+                    </div>
+                    <div style="display:flex; gap:6px;">
+                      <div style="font-size:8px; background:#111; color:#fff; padding:5px 10px; border-radius:5px; font-weight:600;">Adjust Limits</div>
+                      <div style="font-size:8px; background:var(--orange-primary); color:#fff; padding:5px 10px; border-radius:5px; font-weight:600;">Launch Diagnostics</div>
+                    </div>
+                  </div>
+                  <div style="display:grid; grid-template-columns:1fr 1fr; gap:0; border-bottom:1px solid var(--border-color);">
+                    <div style="padding:10px 14px; border-right:1px solid var(--border-color);">
+                      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                        <div>
+                          <div style="font-size:8px; color:#888; font-weight:600; letter-spacing:1px;">GPU ACCELERATOR &nbsp;<span style="background:#e2e8f0; padding:1px 4px; border-radius:3px;">CUDA 12.x</span></div>
+                          <div style="font-size:11px; font-weight:800; color:#111; margin-top:1px;">NVIDIA GeForce GTX 1650</div>
+                        </div>
+                        <span style="font-size:8px; background:#d1fae5; color:#065f46; padding:2px 7px; border-radius:4px; font-weight:600;">● AVAILABLE (IDLE)</span>
+                      </div>
+                      <div style="display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:6px; margin:6px 0;">
+                        <div style="text-align:center;"><div style="font-size:14px; font-weight:700; color:#111;">0%</div><div style="font-size:7.5px; color:#888;">GPU Core Load</div></div>
+                        <div style="text-align:center;"><div style="font-size:14px; font-weight:700; color:var(--orange-primary);">0 MB</div><div style="font-size:7.5px; color:#888;">Client VRAM</div></div>
+                        <div style="text-align:center;"><div style="font-size:14px; font-weight:700; color:#111;">47°C</div><div style="font-size:7.5px; color:#888;">Temperature</div></div>
+                        <div style="text-align:center;"><div style="font-size:14px; font-weight:700; color:var(--orange-primary);">0</div><div style="font-size:7.5px; color:#888;">Active Pods</div></div>
+                      </div>
+                      <div style="margin-top:4px;">
+                        <div style="display:flex; justify-content:space-between; font-size:7.5px; color:#888; margin-bottom:3px;"><span>VRAM Allocation Breakdown</span><span>0.00 GB client / 2.0 GB cap</span></div>
+                        <div style="height:6px; border-radius:3px; background:#e2e8f0; overflow:hidden;">
+                          <div style="width:3%; height:100%; background:var(--orange-primary); border-radius:3px;"></div>
+                        </div>
+                        <div style="display:flex; gap:10px; margin-top:3px; font-size:7px; color:#888;">
+                          <span>🟠 Client: 0.00 GB</span><span>🟢 Available: 2.00 GB</span><span>⬜ Private: 2.0 GB</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div style="padding:10px 14px;">
+                      <div style="font-size:8px; color:#888; font-weight:600; letter-spacing:1px; margin-bottom:1px;">HOST COMPUTE & MEMORY &nbsp;<span style="color:#555; font-weight:400;">AMD Ryzen 5 4600H (12 Cores)</span></div>
+                      <div style="font-size:11px; font-weight:800; color:#111; margin-bottom:6px;">CPU & System RAM</div>
+                      <div style="font-size:8px; font-weight:600; letter-spacing:1px; color:#aaa; margin-bottom:4px;">CPU CORES</div>
+                      <div style="display:flex; justify-content:space-between; font-size:8px; color:#333; margin-bottom:2px;"><span>Your Sharing Allocation</span><span style="font-weight:700;">2 / 12 Cores (17%)</span></div>
+                      <div style="height:5px; background:#e2e8f0; border-radius:3px; margin-bottom:8px;"><div style="width:17%; height:100%; background:#111; border-radius:3px;"></div></div>
+                      <div style="font-size:8px; font-weight:600; letter-spacing:1px; color:#aaa; margin-bottom:4px;">SYSTEM RAM</div>
+                      <div style="display:flex; justify-content:space-between; font-size:8px; color:#333; margin-bottom:2px;"><span>Your Sharing Allocation</span><span style="font-weight:700;">4.0 / 15.4 GB (26%)</span></div>
+                      <div style="height:5px; background:#e2e8f0; border-radius:3px; margin-bottom:4px;"><div style="width:26%; height:100%; background:var(--teal-primary); border-radius:3px;"></div></div>
+                      <div style="font-size:7.5px; color:#888;">Physical: 12 Cores · 15 GB RAM &nbsp;·&nbsp; Docker cgroups v2 Enforced</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="bullet-list" style="gap:18px;">
+                <li class="bullet-item">
+                  <span class="bullet-icon" style="color:var(--orange-primary);">▶</span>
+                  <div>
+                    <strong>Node Identity Header</strong><br>
+                    Displays machine ID (e.g. <code style="font-family:var(--font-mono);font-size:10px;">node-bf550f</code>), live Tailscale mesh IP,
+                    and agent heartbeat status. Updated via <code style="font-family:var(--font-mono);font-size:10px;">GET /admin/machines</code> every 5 seconds.
+                  </div>
+                </li>
+                <li class="bullet-item">
+                  <span class="bullet-icon" style="color:var(--teal-primary);">▶</span>
+                  <div>
+                    <strong>Sharing Allocation Banner</strong><br>
+                    Clearly shows the provider's active cap: max VRAM, CPU cores, and RAM exposed to renters.
+                    <em>"CAP ENFORCED"</em> badge confirms Docker cgroup limits are active and binding.
+                  </div>
+                </li>
+                <li class="bullet-item">
+                  <span class="bullet-icon" style="color:var(--orange-primary);">▶</span>
+                  <div>
+                    <strong>GPU Accelerator Panel</strong><br>
+                    NVML-sourced live metrics: GPU core load %, client VRAM (MB), temperature (°C), active pod count.
+                    VRAM breakdown bar shows client reserved vs. available vs. private split.
+                  </div>
+                </li>
+                <li class="bullet-item">
+                  <span class="bullet-icon" style="color:var(--teal-primary);">▶</span>
+                  <div>
+                    <strong>CPU & RAM Panel</strong><br>
+                    Host system breakdown: sharing allocation vs. total cores/GB, live host load %, client consumption,
+                    and Docker cgroup enforcement status. All reads sourced from <code style="font-family:var(--font-mono);font-size:10px;">psutil</code>.
+                  </div>
+                </li>
+                <li class="bullet-item">
+                  <span class="bullet-icon" style="color:var(--orange-primary);">▶</span>
+                  <div>
+                    <strong>Tech: Electron + Vite + React + Tailwind</strong><br>
+                    <code style="font-family:var(--font-mono);font-size:10px;">provider-app/src/App.jsx</code> ·
+                    <code style="font-family:var(--font-mono);font-size:10px;">GpuUsageCard.jsx</code> ·
+                    <code style="font-family:var(--font-mono);font-size:10px;">CpuRamUsageCard.jsx</code>
+                  </div>
+                </li>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- SLIDE 13: Active Workload Pods & Execution Logs -->
+        <section class="slide" data-slide-name="Workload Pods & Logs">
+          <div class="slide-title-wrap">
+            <span class="slide-subtitle">13 / Provider Runtime — Live Pods</span>
+            <h2 class="slide-title">Active Renter Workload Pods & Docker Execution Logs</h2>
+          </div>
+          <div class="slide-content">
+            <div class="grid-2" style="align-items:start; gap:24px;">
+              <div>
+                <div style="border:1px solid var(--border-color); border-radius:10px; overflow:hidden; background:#fff; box-shadow:0 4px 20px rgba(0,0,0,0.06); font-size:10px; margin-bottom:14px;">
+                  <div style="padding:10px 14px; border-bottom:1px solid var(--border-color); display:flex; justify-content:space-between; align-items:center;">
+                    <div>
+                      <div style="display:flex; align-items:center; gap:8px; margin-bottom:2px;">
+                        <span style="font-size:11px; font-weight:700; color:#111;">Active Renter Workload Pods</span>
+                        <span style="font-size:7.5px; background:#d1fae5; color:#065f46; padding:2px 7px; border-radius:3px; font-weight:600;">HARDWARE SANDBOXED</span>
+                      </div>
+                      <div style="font-size:8px; color:#888;">Docker containers executing isolated CUDA kernels and Jupyter workloads on your host</div>
+                    </div>
+                    <span style="font-size:8px; background:#f1f5f9; padding:4px 10px; border-radius:5px; font-weight:600; color:#555;">0 Running Pods</span>
+                  </div>
+                  <div style="display:grid; grid-template-columns:2fr 1.5fr 1fr 1.5fr 1.5fr 0.8fr; gap:0; padding:6px 14px; background:#f8fafc; font-size:7.5px; font-weight:700; letter-spacing:1px; color:#888; border-bottom:1px solid var(--border-color);">
+                    <span>CONTAINER POD & RUNTIME</span><span>WORKLOAD STATUS</span><span>CUDA ACTIVITY</span><span>HARDWARE ISOLATION</span><span>NETWORK & TUNNEL</span><span>ACTIONS</span>
+                  </div>
+                  <div style="padding:20px 14px; text-align:center; color:#aaa; font-size:10px;">No active pods</div>
+                </div>
+                <div style="border:1px solid var(--border-color); border-radius:10px; overflow:hidden; background:#fff; font-size:10px;">
+                  <div style="padding:8px 14px; border-bottom:1px solid var(--border-color); display:flex; justify-content:space-between; align-items:center;">
+                    <div style="display:flex; align-items:center; gap:6px;">
+                      <span style="width:7px;height:7px;border-radius:50%;background:#10b981;display:inline-block;"></span>
+                      <span style="font-size:9px; font-weight:700; letter-spacing:1px; color:#555;">LIVE DOCKER & KERNEL EXECUTION LOGS</span>
+                      <span style="font-size:7.5px; background:#f1f5f9; padding:1px 6px; border-radius:3px; color:#888;">0 Active Pods</span>
+                    </div>
+                    <div style="display:flex; gap:6px;">
+                      <span style="font-size:7.5px; border:1px solid var(--border-color); padding:2px 8px; border-radius:4px; color:#555;">Auto-Scroll</span>
+                      <span style="font-size:7.5px; border:1px solid var(--border-color); padding:2px 8px; border-radius:4px; color:#555;">Copy Logs</span>
+                    </div>
+                  </div>
+                  <div style="padding:6px 14px; border-bottom:1px solid var(--border-color); display:flex; align-items:center; gap:8px;">
+                    <span style="font-size:8px; color:#888;">SOURCE:</span>
+                    <span style="font-size:8px; background:#111; color:#fff; padding:3px 10px; border-radius:4px; font-weight:600;">All Stream Output</span>
+                  </div>
+                  <div style="background:#0a0a0a; padding:12px 14px; min-height:80px; font-family:var(--font-mono); font-size:9px; color:#fbbf24;">
+                    [System] Worker daemon connected. Ready for workload execution.
+                  </div>
+                  <div style="padding:5px 14px; border-top:1px solid var(--border-color); display:flex; justify-content:space-between; font-size:7.5px; color:#aaa;">
+                    <span>● Real-time stdout from Docker Engine daemon</span>
+                    <span>Showing last 80 lines per container</span>
+                  </div>
+                </div>
+              </div>
+              <div class="bullet-list" style="gap:18px;">
+                <li class="bullet-item">
+                  <span class="bullet-icon" style="color:var(--orange-primary);">▶</span>
+                  <div>
+                    <strong>Active Workload Pod Table</strong><br>
+                    Columns: Container ID & Runtime, Workload Status (running/idle), CUDA Activity (%),
+                    Hardware Isolation (VRAM/CPU/RAM caps), Network & Tunnel URL, and Stop action.
+                    Populated from <code style="font-family:var(--font-mono);font-size:10px;">GET /admin/jobs</code>.
+                  </div>
+                </li>
+                <li class="bullet-item">
+                  <span class="bullet-icon" style="color:var(--teal-primary);">▶</span>
+                  <div>
+                    <strong>Hardware Sandboxed Badge</strong><br>
+                    Every container is launched with <code style="font-family:var(--font-mono);font-size:10px;">--cpus</code>,
+                    <code style="font-family:var(--font-mono);font-size:10px;">-m</code>, and
+                    <code style="font-family:var(--font-mono);font-size:10px;">GPUSHARE_VRAM_GB</code> environment variable
+                    injected. Cgroups v2 enforce limits at the kernel level.
+                  </div>
+                </li>
+                <li class="bullet-item">
+                  <span class="bullet-icon" style="color:var(--orange-primary);">▶</span>
+                  <div>
+                    <strong>Live Docker Log Stream</strong><br>
+                    IPC bridge from Electron main process (<code style="font-family:var(--font-mono);font-size:10px;">electron/main.js</code>)
+                    streams stdout/stderr from <code style="font-family:var(--font-mono);font-size:10px;">docker logs -f</code>
+                    to the renderer via <code style="font-family:var(--font-mono);font-size:10px;">ipcMain → ipcRenderer</code>.
+                  </div>
+                </li>
+                <li class="bullet-item">
+                  <span class="bullet-icon" style="color:var(--teal-primary);">▶</span>
+                  <div>
+                    <strong>Source Selector</strong><br>
+                    Provider can switch log source between "All Stream Output", individual container IDs, or
+                    the host agent daemon log to debug specific renters without losing terminal history.
+                  </div>
+                </li>
+                <li class="bullet-item">
+                  <span class="bullet-icon" style="color:var(--orange-primary);">▶</span>
+                  <div>
+                    <strong>Mesh Network & Node Identity Panel</strong><br>
+                    Below the logs, a collapsible section exposes the Tailscale WireGuard peer parameters:
+                    node public key, Tailnet IP, peer list, and last heartbeat timestamp to Hub.
+                  </div>
+                </li>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- SLIDE 14: Tech Stack Deep Dive -->
+        <section class="slide" data-slide-name="Tech Stack Deep Dive">
+          <div class="slide-title-wrap">
+            <span class="slide-subtitle">14 / Engineering Reference</span>
+            <h2 class="slide-title">Full Technology Stack & Dependency Map</h2>
+          </div>
+          <div class="slide-content">
+            <div class="grid-3" style="gap:18px; align-items:start;">
+              <div>
+                <div style="font-size:10px; font-weight:700; letter-spacing:1.5px; color:var(--orange-primary); text-transform:uppercase; margin-bottom:10px; padding-bottom:6px; border-bottom:2px solid var(--orange-primary);">Backend & Infrastructure</div>
+                <table style="width:100%; border-collapse:collapse; font-size:10px;">
+                  <tr style="background:#f8fafc;">
+                    <td style="padding:5px 8px; font-weight:600; color:#333; border:1px solid var(--border-color);">FastAPI</td>
+                    <td style="padding:5px 8px; color:#555; border:1px solid var(--border-color);">REST hub, matchmaking, heartbeat</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:5px 8px; font-weight:600; color:#333; border:1px solid var(--border-color);">SQLAlchemy</td>
+                    <td style="padding:5px 8px; color:#555; border:1px solid var(--border-color);">ORM — SQLite (dev) / PostgreSQL (prod)</td>
+                  </tr>
+                  <tr style="background:#f8fafc;">
+                    <td style="padding:5px 8px; font-weight:600; color:#333; border:1px solid var(--border-color);">Uvicorn</td>
+                    <td style="padding:5px 8px; color:#555; border:1px solid var(--border-color);">ASGI server, async request handling</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:5px 8px; font-weight:600; color:#333; border:1px solid var(--border-color);">Railway</td>
+                    <td style="padding:5px 8px; color:#555; border:1px solid var(--border-color);">Cloud deployment + managed PostgreSQL</td>
+                  </tr>
+                  <tr style="background:#f8fafc;">
+                    <td style="padding:5px 8px; font-weight:600; color:#333; border:1px solid var(--border-color);">Docker</td>
+                    <td style="padding:5px 8px; color:#555; border:1px solid var(--border-color);">Jupyter PyTorch sandbox containers</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:5px 8px; font-weight:600; color:#333; border:1px solid var(--border-color);">Cloudflare</td>
+                    <td style="padding:5px 8px; color:#555; border:1px solid var(--border-color);">Quick tunnels — zero-config HTTPS</td>
+                  </tr>
+                  <tr style="background:#f8fafc;">
+                    <td style="padding:5px 8px; font-weight:600; color:#333; border:1px solid var(--border-color);">Tailscale</td>
+                    <td style="padding:5px 8px; color:#555; border:1px solid var(--border-color);">WireGuard mesh VPN overlay network</td>
+                  </tr>
+                </table>
+              </div>
+              <div>
+                <div style="font-size:10px; font-weight:700; letter-spacing:1.5px; color:var(--teal-primary); text-transform:uppercase; margin-bottom:10px; padding-bottom:6px; border-bottom:2px solid var(--teal-primary);">Host Agent & GPU Layer</div>
+                <table style="width:100%; border-collapse:collapse; font-size:10px;">
+                  <tr style="background:#f8fafc;">
+                    <td style="padding:5px 8px; font-weight:600; color:#333; border:1px solid var(--border-color);">nvidia-ml-py</td>
+                    <td style="padding:5px 8px; color:#555; border:1px solid var(--border-color);">NVML bindings — live VRAM & GPU util</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:5px 8px; font-weight:600; color:#333; border:1px solid var(--border-color);">psutil</td>
+                    <td style="padding:5px 8px; color:#555; border:1px solid var(--border-color);">CPU/RAM/process monitoring</td>
+                  </tr>
+                  <tr style="background:#f8fafc;">
+                    <td style="padding:5px 8px; font-weight:600; color:#333; border:1px solid var(--border-color);">sitecustomize.py</td>
+                    <td style="padding:5px 8px; color:#555; border:1px solid var(--border-color);">User-space GPU slicing hook</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:5px 8px; font-weight:600; color:#333; border:1px solid var(--border-color);">docker-py</td>
+                    <td style="padding:5px 8px; color:#555; border:1px solid var(--border-color);">Python Docker SDK — container lifecycle</td>
+                  </tr>
+                  <tr style="background:#f8fafc;">
+                    <td style="padding:5px 8px; font-weight:600; color:#333; border:1px solid var(--border-color);">asyncio</td>
+                    <td style="padding:5px 8px; color:#555; border:1px solid var(--border-color);">Async heartbeat & watchdog loops</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:5px 8px; font-weight:600; color:#333; border:1px solid var(--border-color);">requests / httpx</td>
+                    <td style="padding:5px 8px; color:#555; border:1px solid var(--border-color);">Hub API polling from host</td>
+                  </tr>
+                  <tr style="background:#f8fafc;">
+                    <td style="padding:5px 8px; font-weight:600; color:#333; border:1px solid var(--border-color);">NVIDIA CUDA</td>
+                    <td style="padding:5px 8px; color:#555; border:1px solid var(--border-color);">torch.cuda memory fraction API</td>
+                  </tr>
+                </table>
+              </div>
+              <div>
+                <div style="font-size:10px; font-weight:700; letter-spacing:1.5px; color:#7c3aed; text-transform:uppercase; margin-bottom:10px; padding-bottom:6px; border-bottom:2px solid #7c3aed;">Frontend & Desktop App</div>
+                <table style="width:100%; border-collapse:collapse; font-size:10px;">
+                  <tr style="background:#f8fafc;">
+                    <td style="padding:5px 8px; font-weight:600; color:#333; border:1px solid var(--border-color);">Next.js 14</td>
+                    <td style="padding:5px 8px; color:#555; border:1px solid var(--border-color);">Renter marketplace — App Router</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:5px 8px; font-weight:600; color:#333; border:1px solid var(--border-color);">TypeScript</td>
+                    <td style="padding:5px 8px; color:#555; border:1px solid var(--border-color);">Type-safe frontend components</td>
+                  </tr>
+                  <tr style="background:#f8fafc;">
+                    <td style="padding:5px 8px; font-weight:600; color:#333; border:1px solid var(--border-color);">Electron</td>
+                    <td style="padding:5px 8px; color:#555; border:1px solid var(--border-color);">Native desktop shell for providers</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:5px 8px; font-weight:600; color:#333; border:1px solid var(--border-color);">React + Vite</td>
+                    <td style="padding:5px 8px; color:#555; border:1px solid var(--border-color);">Provider dashboard renderer</td>
+                  </tr>
+                  <tr style="background:#f8fafc;">
+                    <td style="padding:5px 8px; font-weight:600; color:#333; border:1px solid var(--border-color);">Tailwind CSS</td>
+                    <td style="padding:5px 8px; color:#555; border:1px solid var(--border-color);">Utility-first styling (provider app)</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:5px 8px; font-weight:600; color:#333; border:1px solid var(--border-color);">ipcMain/ipcRenderer</td>
+                    <td style="padding:5px 8px; color:#555; border:1px solid var(--border-color);">Electron IPC — agent ↔ UI bridge</td>
+                  </tr>
+                  <tr style="background:#f8fafc;">
+                    <td style="padding:5px 8px; font-weight:600; color:#333; border:1px solid var(--border-color);">Vercel</td>
+                    <td style="padding:5px 8px; color:#555; border:1px solid var(--border-color);">Zero-config CI/CD for Next.js app</td>
+                  </tr>
+                </table>
+                <div style="margin-top:12px; padding:8px 10px; background:#f8fafc; border:1px solid var(--border-color); border-radius:7px; font-size:9px;">
+                  <div style="font-weight:700; color:#333; margin-bottom:4px;">Platform Support</div>
+                  <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                    <span style="background:#e0f2fe; color:#0369a1; padding:2px 8px; border-radius:4px;">Linux (Ubuntu/Debian)</span>
+                    <span style="background:#fce7f3; color:#9d174d; padding:2px 8px; border-radius:4px;">Windows + WSL2 GPU</span>
+                    <span style="background:#d1fae5; color:#065f46; padding:2px 8px; border-radius:4px;">NVIDIA RTX/GTX Series</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+      </div>
+
+      <!-- Bottom Navigation Control Panel -->
+      <footer class="controls">
+        <button class="control-btn" id="prevBtn" onclick="prevSlide()" disabled>
+          &larr; Previous
+        </button>
+
+        <div style="display:flex; align-items:center; gap:16px;">
+          <span class="slide-counter" id="slideCounter">1 / 14</span>
+          <button class="control-btn play-pause-btn" id="playBtn" onclick="togglePlay()">
+            Play Slideshow
+          </button>
+        </div>
+
+        <button class="control-btn" id="nextBtn" onclick="nextSlide()">
+          Next &rarr;
+        </button>
+      </footer>
+
+      <!-- Progress bar -->
+      <div class="progress-bar-container">
+        <div class="progress-bar" id="progressBar"></div>
+      </div>
+    </main>
+
+  </div>
+
+  <!-- JavaScript logic -->
+  <script>
+    // Slide registry metadata
+    const slides = document.querySelectorAll('.slide');
+    const navList = document.getElementById('navList');
+    const slideCounter = document.getElementById('slideCounter');
+    const progressBar = document.getElementById('progressBar');
+    const prevBtn = document.getElementById('prevBtn');
+    const nextBtn = document.getElementById('nextBtn');
+    const playBtn = document.getElementById('playBtn');
+
+    let currentIdx = 0;
+    let slideshowInterval = null;
+    let isPlaying = false;
+
+    // Code snippets dictionary
+    const codeSnippets = {
+      slicing: `# sitecustomize.py - User-space GPU Slicing
+import sys, os, threading, time
+
+def configure_gpu_limits():
+    vram_cap_gb_str = os.getenv("GPUSHARE_VRAM_GB")
+    if not vram_cap_gb_str: return
+    limit_bytes = float(vram_cap_gb_str) * 1024**3
+
+    def watch_imports():
+        torch_configured = False
+        while True:
+            if 'torch' in sys.modules and not torch_configured:
+                import torch
+                if torch.cuda.is_available():
+                    # Calculate device VRAM allocation fraction
+                    total_mem = torch.cuda.get_device_properties(0).total_memory
+                    fraction = min(1.0, limit_bytes / total_mem)
+                    
+                    # Apply hard software fraction limit inside CUDA driver
+                    torch.cuda.set_per_process_memory_fraction(fraction, 0)
+                    torch_configured = True
+            time.sleep(0.5)
+
+    threading.Thread(target=watch_imports, daemon=True).start()`,
+
+      watchdog: `# agent.py - Host Safeguard Watchdog Loop
+def overload_watchdog_loop():
+    consecutive_ram_spikes = 0
+    while True:
+        time.sleep(3)
+        running = get_active_renter_containers()
+        if not running: continue
+
+        # 1. Thermal protection guard
+        stats = get_gpu_stats()
+        if stats["temp_c"] >= 88:
+            halt_all_active_containers("Critical GPU Overheat")
+            
+        # 2. Host System RAM safeguards
+        ram_pct = psutil.virtual_memory().percent
+        if ram_pct >= 96:
+            consecutive_ram_spikes += 1
+            if consecutive_ram_spikes >= 3:
+                halt_all_active_containers("RAM Saturation")
+        else:
+            consecutive_ram_spikes = 0`
+    };
+
+    // Architecture diagram details registry
+    const archDetails = {
+      renter: {
+        title: "Renter Spawner UI (Next.js)",
+        text: "The web-facing gateway where renters request resources (VRAM, CPU, RAM). It communicates with the FastAPI Hub to request matching nodes. Once a match is found and spawned, it redirects the renter to the Jupyter interface."
+      },
+      portal: {
+        title: "FastAPI Hub Orchestrator",
+        text: "The brain of the platform. Hosts send heartbeats to this node. The spawner matchmaking queries current machine states, matches renting requests, sets up job tokens, and provides automated host script generators."
+      },
+      tailscale: {
+        title: "Tailscale private VPN Mesh",
+        text: "Secures host-to-hub control operations. The host registers to the Tailnet automatically on installation using a pre-auth token. The backend makes API calls to hosts over this private overlay network, bypassing local NAT/firewall constraints."
+      },
+      provider: {
+        title: "Python Host Daemon Agent",
+        text: "A background agent running on provider hosts. Initiates hardware capability checks, reports heartbeats, listens for jobs, instantiates Docker containers, configures limits, and monitors temperatures and safety guards."
+      },
+      docker: {
+        title: "Docker Sandbox Node & cloudflared Tunnel",
+        text: "Containers run the Jupyter GPU notebook instance. On launch, the host agent binds an ephemeral cloudflared Quick Tunnel. The tunnel forwards local container port 8888 through Cloudflare edge nodes, yielding a secure public URL."
+      }
+    };
+
+    // Generate Left Sidebar items dynamically
+    function initSidebar() {
+      navList.innerHTML = '';
+      slides.forEach((slide, idx) => {
+        const slideName = slide.getAttribute('data-slide-name') || `Slide ${idx + 1}`;
+        const li = document.createElement('li');
+        li.innerHTML = `
+          <a class="nav-item ${idx === 0 ? 'active' : ''}" onclick="goToSlide(${idx})">
+            <span class="nav-item-num">${String(idx + 1).padStart(2, '0')}</span>
+            <span>${slideName}</span>
+          </a>
+        `;
+        navList.appendChild(li);
+      });
+    }
+
+    // Slide Carousel navigation logic
+    function updateCarousel() {
+      slides.forEach((slide, idx) => {
+        slide.className = 'slide';
+        if (idx === currentIdx) {
+          slide.classList.add('active');
+        } else if (idx < currentIdx) {
+          slide.classList.add('prev');
+        }
+      });
+
+      // Update Nav List styles
+      const navItems = document.querySelectorAll('.nav-item');
+      navItems.forEach((item, idx) => {
+        if (idx === currentIdx) {
+          item.classList.add('active');
+          // Scroll nav list item into view if needed
+          item.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        } else {
+          item.classList.remove('active');
+        }
+      });
+
+      // Update progress bar & counters
+      slideCounter.innerText = `${currentIdx + 1} / ${slides.length}`;
+      const percentage = ((currentIdx + 1) / slides.length) * 100;
+      progressBar.style.width = `${percentage}%`;
+
+      // Update Buttons
+      prevBtn.disabled = currentIdx === 0;
+      nextBtn.disabled = currentIdx === slides.length - 1;
+    }
+
+    function nextSlide() {
+      if (currentIdx < slides.length - 1) {
+        currentIdx++;
+        updateCarousel();
+      } else if (isPlaying) {
+        // Loop back to start in autoplay mode
+        currentIdx = 0;
+        updateCarousel();
+      }
+    }
+
+    function prevSlide() {
+      if (currentIdx > 0) {
+        currentIdx--;
+        updateCarousel();
+      }
+    }
+
+    function goToSlide(idx) {
+      currentIdx = idx;
+      updateCarousel();
+      if (isPlaying) {
+        resetAutoplay();
+      }
+    }
+
+    // Code Snippet Switcher
+    function switchCode(key) {
+      const tabs = document.querySelectorAll('.code-tab');
+      tabs.forEach(tab => {
+        if (tab.innerText.toLowerCase().includes(key)) {
+          tab.classList.add('active');
+        } else {
+          tab.classList.remove('active');
+        }
+      });
+
+      const panel = document.getElementById('codePanel');
+      let code = codeSnippets[key] || '';
+
+      // Basic client-side regex syntax highlighter for presentation visuals
+      code = code
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/(\bdef\b|\bimport\b|\bfrom\b|\breturn\b|\bif\b|\belse\b|\bwhile\b|\bnot\b|\bin\b|\btry\b|\bexcept\b)/g, '<span class="keyword">$1</span>')
+        .replace(/(\bTrue\b|\bFalse\b|\bNone\b)/g, '<span class="keyword">$1</span>')
+        .replace(/(".*?"|'.*?')/g, '<span class="string">$1</span>')
+        .replace(/(#.*)/g, '<span class="comment">$1</span>')
+        .replace(/(\b\d+\b)/g, '<span class="number">$1</span>');
+
+      panel.innerHTML = code;
+    }
+
+    // Architecture diagram details trigger
+    function showArchDetail(key) {
+      const detail = archDetails[key];
+      const box = document.getElementById('diagramDetailBox');
+      if (detail) {
+        box.innerHTML = `
+          <div class="diagram-detail-title" style="color:var(--orange-primary); font-family:var(--font-display); font-size:16px; font-weight:600; margin-bottom:8px;">${detail.title}</div>
+          <p class="card-text" style="color:var(--text-primary); font-size:13.5px; line-height:1.6;">${detail.text}</p>
+        `;
+      }
+    }
+
+    // Slide Autoplay Slideshow
+    function togglePlay() {
+      if (isPlaying) {
+        stopAutoplay();
+      } else {
+        startAutoplay();
+      }
+    }
+
+    function startAutoplay() {
+      isPlaying = true;
+      playBtn.innerText = 'Pause Slideshow';
+      playBtn.classList.add('play-pause-btn');
+      slideshowInterval = setInterval(nextSlide, 10000); // 10s slide duration
+    }
+
+    function stopAutoplay() {
+      isPlaying = false;
+      playBtn.innerText = 'Play Slideshow';
+      clearInterval(slideshowInterval);
+    }
+
+    function resetAutoplay() {
+      stopAutoplay();
+      startAutoplay();
+    }
+
+    // Keyboard bindings listener
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') {
+        e.preventDefault();
+        nextSlide();
+      } else if (e.key === 'ArrowLeft' || e.key === 'Backspace' || e.key === 'PageUp') {
+        e.preventDefault();
+        prevSlide();
+      } else if (e.key === 'Home') {
+        e.preventDefault();
+        goToSlide(0);
+      } else if (e.key === 'End') {
+        e.preventDefault();
+        goToSlide(slides.length - 1);
+      }
+    });
+
+    // Touch swiping handlers
+    let touchStartX = 0;
+    let touchEndX = 0;
+
+    document.addEventListener('touchstart', (e) => {
+      touchStartX = e.changedTouches[0].screenX;
+    });
+
+    document.addEventListener('touchend', (e) => {
+      touchEndX = e.changedTouches[0].screenX;
+      handleSwipe();
+    });
+
+    function handleSwipe() {
+      const swipeDistance = touchEndX - touchStartX;
+      if (swipeDistance < -50) {
+        nextSlide();
+      } else if (swipeDistance > 50) {
+        prevSlide();
+      }
+    }
+
+    // Initialization
+    window.addEventListener('load', () => {
+      initSidebar();
+      updateCarousel();
+      switchCode('slicing');
+    });
+  </script>
+</body>
+
+</html>
