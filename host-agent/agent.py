@@ -926,6 +926,7 @@ def send_heartbeat():
         "vram_free_mb": stats["vram_free_mb"],
         "cpus": stats["cpus"],
         "shared_ram_gb": float(config.get("shared_ram_gb", 8.0)),
+        "gpu_utilization_percent": float(stats.get("gpu_util_pct", 0.0)),
     }
     try:
         resp = requests.post(BACKEND_URL, json=payload, timeout=5)
