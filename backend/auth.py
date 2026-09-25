@@ -7,8 +7,8 @@ from typing import Optional
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+import bcrypt
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
 from database import SessionLocal
@@ -21,19 +21,25 @@ SECRET_KEY  = os.environ.get("JWT_SECRET_KEY", "change-me-in-production-please")
 ALGORITHM   = "HS256"
 TOKEN_TTL_HOURS = 24 * 7   # JWT itself valid for 7 days; session TTL enforced separately
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
 # ---------------------------------------------------------------------------
-# Password helpers
+# Password helpers (using direct bcrypt for 100% compatibility)
 # ---------------------------------------------------------------------------
 def hash_password(plain: str) -> str:
-    return pwd_context.hash(plain)
+    # Truncate to 72 bytes per bcrypt standard
+    pwd_bytes = plain.encode("utf-8")[:72]
+    salt = bcrypt.gensalt()
+    return bcrypt.hashpw(pwd_bytes, salt).decode("utf-8")
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain, hashed)
+    try:
+        pwd_bytes = plain.encode("utf-8")[:72]
+        return bcrypt.checkpw(pwd_bytes, hashed.encode("utf-8"))
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------------------

@@ -70,16 +70,16 @@ export default function RentForm({ user }: { user: UserQuota }) {
   const quotaVram = user.max_vram_gb
   const quotaCpu  = user.max_cpu_cores
   const quotaRam  = user.max_ram_gb
-  const [selectedPreset, setSelectedPreset] = useState<string>('vision')
-  const [vram, setVram] = useState<number>(4)
-  const [cpuCores, setCpuCores] = useState<number>(4)
-  const [ramGb, setRamGb] = useState<number>(8)
+  const [selectedPreset, setSelectedPreset] = useState<string>(() => (quotaVram < 4 ? 'starter' : 'vision'))
+  const [vram, setVram] = useState<number>(() => Math.min(4, quotaVram))
+  const [cpuCores, setCpuCores] = useState<number>(() => Math.min(4, quotaCpu))
+  const [ramGb, setRamGb] = useState<number>(() => Math.min(8, quotaRam))
   const [showGuide, setShowGuide] = useState<boolean>(false)
 
   const [onlineMachines, setOnlineMachines] = useState<Machine[]>([])
-  const [maxAvailableVram, setMaxAvailableVram] = useState<number | null>(null)
-  const [maxAvailableCpus, setMaxAvailableCpus] = useState<number | null>(null)
-  const [maxAvailableRam, setMaxAvailableRam] = useState<number | null>(null)
+  const [maxAvailableVram, setMaxAvailableVram] = useState<number | null>(quotaVram)
+  const [maxAvailableCpus, setMaxAvailableCpus] = useState<number | null>(quotaCpu)
+  const [maxAvailableRam, setMaxAvailableRam] = useState<number | null>(quotaRam)
 
   const [message, setMessage] = useState('')
   const [jupyterToken, setJupyterToken] = useState('')
@@ -102,7 +102,7 @@ export default function RentForm({ user }: { user: UserQuota }) {
             // Cap to user quota
             const effectiveMaxV = Math.floor(Math.min(machineMaxV, quotaVram) * 10) / 10
             const effectiveMaxC = Math.min(machineMaxC, quotaCpu)
-            const effectiveMaxR = machineMaxR > 0 ? Math.min(machineMaxR, quotaRam) : null
+            const effectiveMaxR = machineMaxR > 0 ? Math.min(machineMaxR, quotaRam) : quotaRam
             setMaxAvailableVram(effectiveMaxV)
             setMaxAvailableCpus(effectiveMaxC)
             setMaxAvailableRam(effectiveMaxR)
@@ -122,6 +122,9 @@ export default function RentForm({ user }: { user: UserQuota }) {
   }, [quotaVram, quotaCpu, quotaRam])
 
   const applyPreset = (preset: Preset) => {
+    if (preset.vram > quotaVram || preset.cpus > quotaCpu || preset.ram > quotaRam) {
+      return
+    }
     setSelectedPreset(preset.id)
     setVram(preset.vram)
     setCpuCores(preset.cpus)
@@ -271,15 +274,19 @@ export default function RentForm({ user }: { user: UserQuota }) {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
             {PRESETS.map(preset => {
               const isSelected = selectedPreset === preset.id
-              const exceeds = maxAvailableVram !== null && preset.vram > maxAvailableVram
+              const isQuotaExceeded = preset.vram > quotaVram || preset.cpus > quotaCpu || preset.ram > quotaRam
+              const isCapacityExceeded = !isQuotaExceeded && maxAvailableVram !== null && preset.vram > maxAvailableVram
+              const isDisabled = isQuotaExceeded
               return (
                 <div
                   key={preset.id}
-                  onClick={() => applyPreset(preset)}
-                  className={`p-4 rounded-xl border text-left cursor-pointer transition-all flex flex-col justify-between relative ${
-                    isSelected
-                      ? 'bg-[#bb432c]/5 border-[#bb432c] ring-1 ring-[#bb432c] shadow-xs'
-                      : 'bg-white border-gray-200 hover:border-gray-300 hover:bg-gray-50/60'
+                  onClick={() => !isDisabled && applyPreset(preset)}
+                  className={`p-4 rounded-xl border text-left transition-all flex flex-col justify-between relative ${
+                    isDisabled
+                      ? 'bg-gray-50 border-gray-200 opacity-60 cursor-not-allowed'
+                      : isSelected
+                      ? 'bg-[#bb432c]/5 border-[#bb432c] ring-1 ring-[#bb432c] shadow-xs cursor-pointer'
+                      : 'bg-white border-gray-200 hover:border-gray-300 hover:bg-gray-50/60 cursor-pointer'
                   }`}
                 >
                   <div>
@@ -288,8 +295,9 @@ export default function RentForm({ user }: { user: UserQuota }) {
                       <input
                         type="radio"
                         name="preset"
+                        disabled={isDisabled}
                         checked={isSelected}
-                        onChange={() => applyPreset(preset)}
+                        onChange={() => !isDisabled && applyPreset(preset)}
                         className="text-[#bb432c] focus:ring-[#bb432c] h-4 w-4 accent-[#bb432c]"
                       />
                     </div>
@@ -298,11 +306,15 @@ export default function RentForm({ user }: { user: UserQuota }) {
                       <span className="px-2 py-0.5 bg-gray-100 border border-gray-200 rounded text-[11px] font-medium text-gray-700">
                         {preset.badge}
                       </span>
-                      {exceeds && (
+                      {isQuotaExceeded ? (
+                        <span className="px-2 py-0.5 bg-red-50 border border-red-200 text-red-700 rounded text-[10px] font-medium">
+                          Exceeds your quota
+                        </span>
+                      ) : isCapacityExceeded ? (
                         <span className="px-2 py-0.5 bg-amber-50 border border-amber-300 text-amber-800 rounded text-[10px] font-medium">
                           Exceeds live capacity
                         </span>
-                      )}
+                      ) : null}
                     </div>
 
                     <p className="text-xs text-gray-600 leading-relaxed mb-3">
@@ -346,7 +358,9 @@ export default function RentForm({ user }: { user: UserQuota }) {
             </div>
             <div className="grid grid-cols-6 gap-2">
               {[1, 2, 4, 6, 8, 12].map(v => {
-                const isDisabled = maxAvailableVram !== null && v > maxAvailableVram
+                const isOverQuota = v > quotaVram
+                const isOverCap = maxAvailableVram !== null && v > maxAvailableVram
+                const isDisabled = isOverQuota || isOverCap
                 const active = vram === v
                 return (
                   <button
@@ -363,7 +377,11 @@ export default function RentForm({ user }: { user: UserQuota }) {
                     }`}
                   >
                     {v} GB
-                    {isDisabled && <span className="block text-[9px] font-sans font-normal text-gray-400">Over cap</span>}
+                    {isDisabled && (
+                      <span className="block text-[9px] font-sans font-normal text-gray-400">
+                        {isOverQuota ? 'Over quota' : 'Over cap'}
+                      </span>
+                    )}
                   </button>
                 )
               })}
@@ -382,7 +400,9 @@ export default function RentForm({ user }: { user: UserQuota }) {
             </div>
             <div className="grid grid-cols-5 gap-2">
               {[1, 2, 4, 6, 8].map(c => {
-                const isDisabled = maxAvailableCpus !== null && c > maxAvailableCpus
+                const isOverQuota = c > quotaCpu
+                const isOverCap = maxAvailableCpus !== null && c > maxAvailableCpus
+                const isDisabled = isOverQuota || isOverCap
                 const active = cpuCores === c
                 return (
                   <button
@@ -399,7 +419,11 @@ export default function RentForm({ user }: { user: UserQuota }) {
                     }`}
                   >
                     {c} {c === 1 ? 'Core' : 'Cores'}
-                    {isDisabled && <span className="block text-[9px] font-sans font-normal text-gray-400">Over cap</span>}
+                    {isDisabled && (
+                      <span className="block text-[9px] font-sans font-normal text-gray-400">
+                        {isOverQuota ? 'Over quota' : 'Over cap'}
+                      </span>
+                    )}
                   </button>
                 )
               })}
@@ -418,7 +442,9 @@ export default function RentForm({ user }: { user: UserQuota }) {
             </div>
             <div className="grid grid-cols-5 gap-2">
               {[2, 4, 8, 12, 16].map(r => {
-                const isDisabled = maxAvailableRam !== null && r > maxAvailableRam
+                const isOverQuota = r > quotaRam
+                const isOverCap = maxAvailableRam !== null && r > maxAvailableRam
+                const isDisabled = isOverQuota || isOverCap
                 const active = ramGb === r
                 return (
                   <button
@@ -435,7 +461,11 @@ export default function RentForm({ user }: { user: UserQuota }) {
                     }`}
                   >
                     {r} GB
-                    {isDisabled && <span className="block text-[9px] font-sans font-normal text-gray-400">Over cap</span>}
+                    {isDisabled && (
+                      <span className="block text-[9px] font-sans font-normal text-gray-400">
+                        {isOverQuota ? 'Over quota' : 'Over cap'}
+                      </span>
+                    )}
                   </button>
                 )
               })}

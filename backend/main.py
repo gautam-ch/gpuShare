@@ -288,6 +288,7 @@ async def list_users(
 
 
 @app.put("/admin/users/{user_id}")
+@app.patch("/admin/users/{user_id}")
 async def update_user(
     user_id: str,
     req: UpdateUserRequest,
