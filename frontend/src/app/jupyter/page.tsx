@@ -1,7 +1,8 @@
 "use client"
 import { useState, useEffect, useRef, Suspense } from 'react'
 import Link from 'next/link'
-import { useSearchParams } from 'next/navigation'
+import { useSearchParams, useRouter } from 'next/navigation'
+import { useAuth, useRequireAuth } from '../context/AuthContext'
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000'
 
@@ -16,6 +17,9 @@ const PROGRESS_MESSAGES = [
 
 function JupyterWorkspace() {
   const searchParams = useSearchParams()
+  const { token: jwtToken, loading: authLoading } = useAuth()
+  const { user } = useRequireAuth()
+  const router = useRouter()
   const [token, setToken] = useState('')
   const [url, setUrl] = useState('')
   const [message, setMessage] = useState('')
@@ -25,13 +29,14 @@ function JupyterWorkspace() {
   const pollRef = useRef<NodeJS.Timeout | null>(null)
   const didAutoLaunch = useRef(false)
 
-  // Pre-fill token from URL and auto-launch
+  // Pre-fill token from URL, strip from history (security: prevents token leak via URL)
   useEffect(() => {
     const t = searchParams.get('token')
     if (t && !didAutoLaunch.current) {
       didAutoLaunch.current = true
       setToken(t)
-      // Small delay so state updates before launch
+      // Strip token from URL bar without navigation
+      window.history.replaceState({}, '', '/jupyter')
       setTimeout(() => triggerLaunch(t), 100)
     }
   }, [searchParams])
@@ -55,7 +60,10 @@ function JupyterWorkspace() {
     try {
       const res = await fetch(`${BACKEND_URL}/start-jupyter`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(jwtToken ? { 'Authorization': `Bearer ${jwtToken}` } : {}),
+        },
         body: JSON.stringify({ token: tk })
       })
       const data = await res.json()
@@ -83,7 +91,10 @@ function JupyterWorkspace() {
 
       pollRef.current = setInterval(async () => {
         try {
-          const poll = await fetch(`${BACKEND_URL}/session-status/${job_id}?machine_ip=${machine_ip}`)
+          const poll = await fetch(
+            `${BACKEND_URL}/session-status/${job_id}?machine_ip=${machine_ip}`,
+            { headers: jwtToken ? { 'Authorization': `Bearer ${jwtToken}` } : {} }
+          )
           const result = await poll.json()
           if (result.status === 'done') {
             clearInterval(pollRef.current!)

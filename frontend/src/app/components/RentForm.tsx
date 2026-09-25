@@ -1,7 +1,15 @@
 "use client"
 import { useState, useEffect } from 'react'
+import { useAuth } from '../context/AuthContext'
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000'
+
+interface UserQuota {
+  max_vram_gb: number
+  max_cpu_cores: number
+  max_ram_gb: number
+  active_session: { job_id: number; status: string; jupyter_url: string | null } | null
+}
 
 interface Preset {
   id: string
@@ -56,7 +64,12 @@ const PRESETS: Preset[] = [
   }
 ]
 
-export default function RentForm() {
+export default function RentForm({ user }: { user: UserQuota }) {
+  const { token: jwtToken } = useAuth()
+  // Effective caps = min(user quota, machine availability)
+  const quotaVram = user.max_vram_gb
+  const quotaCpu  = user.max_cpu_cores
+  const quotaRam  = user.max_ram_gb
   const [selectedPreset, setSelectedPreset] = useState<string>('vision')
   const [vram, setVram] = useState<number>(4)
   const [cpuCores, setCpuCores] = useState<number>(4)
@@ -69,11 +82,11 @@ export default function RentForm() {
   const [maxAvailableRam, setMaxAvailableRam] = useState<number | null>(null)
 
   const [message, setMessage] = useState('')
-  const [token, setToken] = useState('')
+  const [jupyterToken, setJupyterToken] = useState('')
   const [jupyterUrl, setJupyterUrl] = useState('')
   const [loading, setLoading] = useState(false)
 
-  // Fetch online capacity
+  // Fetch online capacity — caps are intersection of user quota & machine availability
   useEffect(() => {
     const checkCapacity = async () => {
       try {
@@ -83,18 +96,20 @@ export default function RentForm() {
           const live = data.filter((m: Machine & { shared_ram_gb?: number }) => m.status === 'online')
           setOnlineMachines(live)
           if (live.length > 0) {
-            const maxV = Math.max(...live.map((m: Machine) => (m.vram_free_mb || 0) / 1024))
-            const maxC = Math.max(...live.map((m: Machine) => m.cpus || 0))
-            const maxR = Math.max(...live.map((m: Machine & { shared_ram_gb?: number }) => m.shared_ram_gb || 0))
-            const roundedMaxV = Math.floor(maxV * 10) / 10
-            setMaxAvailableVram(roundedMaxV)
-            setMaxAvailableCpus(maxC)
-            setMaxAvailableRam(maxR > 0 ? maxR : null)
+            const machineMaxV = Math.max(...live.map((m: Machine) => (m.vram_free_mb || 0) / 1024))
+            const machineMaxC = Math.max(...live.map((m: Machine) => m.cpus || 0))
+            const machineMaxR = Math.max(...live.map((m: Machine & { shared_ram_gb?: number }) => m.shared_ram_gb || 0))
+            // Cap to user quota
+            const effectiveMaxV = Math.floor(Math.min(machineMaxV, quotaVram) * 10) / 10
+            const effectiveMaxC = Math.min(machineMaxC, quotaCpu)
+            const effectiveMaxR = machineMaxR > 0 ? Math.min(machineMaxR, quotaRam) : null
+            setMaxAvailableVram(effectiveMaxV)
+            setMaxAvailableCpus(effectiveMaxC)
+            setMaxAvailableRam(effectiveMaxR)
 
-            // Auto-clamp current selections to provider limits (functional update = always fresh state)
-            if (roundedMaxV > 0) setVram(prev => Math.min(prev, roundedMaxV))
-            if (maxC > 0) setCpuCores(prev => Math.min(prev, maxC))
-            if (maxR > 0) setRamGb(prev => Math.min(prev, maxR))
+            if (effectiveMaxV > 0) setVram(prev => Math.min(prev, effectiveMaxV))
+            if (effectiveMaxC > 0) setCpuCores(prev => Math.min(prev, effectiveMaxC))
+            if (effectiveMaxR && effectiveMaxR > 0) setRamGb(prev => Math.min(prev, effectiveMaxR))
           }
         }
       } catch (e) {
@@ -104,7 +119,7 @@ export default function RentForm() {
     checkCapacity()
     const interval = setInterval(checkCapacity, 10000)
     return () => clearInterval(interval)
-  }, [])
+  }, [quotaVram, quotaCpu, quotaRam])
 
   const applyPreset = (preset: Preset) => {
     setSelectedPreset(preset.id)
@@ -121,22 +136,28 @@ export default function RentForm() {
   }
 
   const handleRent = async () => {
+    if (user.active_session) {
+      setMessage('You already have an active session. Stop it before starting a new one.')
+      return
+    }
     setLoading(true)
     setMessage('')
     try {
       const res = await fetch(`${BACKEND_URL}/rent`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${jwtToken}`,
+        },
         body: JSON.stringify({
           vram_required: vram,
           cpu_cores: cpuCores,
           ram_gb: ramGb,
-          cpus_required: cpuCores
         })
       })
       const data = await res.json()
       if (res.ok) {
-        setToken(data.access_token)
+        setJupyterToken(data.access_token)
         setJupyterUrl(data.jupyter_url)
         setMessage(`Server allocated successfully! Launch your workspace below.`)
       } else {
@@ -150,8 +171,8 @@ export default function RentForm() {
   }
 
   const handleLaunch = () => {
-    if (!token) return
-    window.location.href = `/jupyter?token=${token}`
+    if (!jupyterToken) return
+    window.location.href = `/jupyter?token=${jupyterToken}`
   }
 
   const isOverVram = maxAvailableVram !== null && vram > maxAvailableVram
@@ -486,7 +507,7 @@ export default function RentForm() {
             )}
 
             {/* Token & Launch Section */}
-            {token && (
+            {jupyterToken && (
               <div className="mt-5 bg-white border border-gray-300 rounded-xl p-5 space-y-4 shadow-xs">
                 <div className="flex items-center justify-between border-b border-gray-100 pb-3">
                   <div>
@@ -497,7 +518,7 @@ export default function RentForm() {
                 </div>
 
                 <div className="bg-gray-100 p-3 rounded-lg border border-gray-200 font-mono text-xs text-gray-900 break-all select-all">
-                  {token}
+                  {jupyterToken}
                 </div>
 
                 <button

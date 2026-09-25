@@ -2,53 +2,85 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
+import { useRequireAdmin, useAuth } from '../context/AuthContext'
+import { useRouter } from 'next/navigation'
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000'
 
-interface Machine {
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+interface DashboardMachine {
   id: string
   tailscale_ip: string
   vram_total_mb: number
   vram_free_mb: number
   vram_used_mb: number
   cpus: number
+  shared_ram_gb: number
+  gpu_utilization_percent: number
   status: 'online' | 'offline'
   last_heartbeat_seconds_ago: number | null
 }
 
-interface Job {
-  id: number
+interface ActiveSession {
+  job_id: number
+  user_email: string
   machine_id: string
-  status: string
+  machine_ip: string | null
+  gpu_utilization_percent: number | null
   vram_required_mb: number
   cpu_cores: number
   ram_gb: number
+  status: string
   jupyter_url: string | null
-  started_at: string | null
   started_seconds_ago: number | null
 }
 
-interface Stats {
+interface DashboardStats {
   total_machines: number
   online_machines: number
   offline_machines: number
-  active_renters: number
+  active_sessions: number
+  total_users: number
   total_vram_mb: number
   free_vram_mb: number
   used_vram_mb: number
 }
 
-function formatSeconds(s: number | null): string {
+interface ClusterUser {
+  id: string
+  email: string
+  is_admin: boolean
+  is_active: boolean
+  max_vram_gb: number
+  max_cpu_cores: number
+  max_ram_gb: number
+  created_at: string | null
+  active_session: {
+    job_id: number
+    status: string
+    machine_id: string
+    vram_required_mb: number
+    cpu_cores: number
+    ram_gb: number
+    jupyter_url: string | null
+    started_seconds_ago: number | null
+  } | null
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function fmt(s: number | null): string {
   if (s === null) return 'N/A'
   if (s < 60) return `${s}s ago`
   if (s < 3600) return `${Math.floor(s / 60)}m ago`
-  return `${Math.floor(s / 3600)}h ago`
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m ago`
 }
 
-function formatDuration(s: number | null): string {
+function fmtDur(s: number | null): string {
   if (s === null) return 'N/A'
   if (s < 60) return `${s}s`
-  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`
+  if (s < 3600) return `${Math.floor(s / 60)}m`
   return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`
 }
 
@@ -57,347 +89,461 @@ function VramBar({ used, total }: { used: number; total: number }) {
   const color = pct > 80 ? '#dc2626' : pct > 50 ? '#d97706' : '#16a34a'
   return (
     <div className="flex items-center gap-2">
-      <div className="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
-        <div
-          style={{ width: `${pct}%`, backgroundColor: color }}
-          className="h-full rounded-full transition-all duration-300"
-        />
+      <div className="flex-1 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+        <div style={{ width: `${pct}%`, backgroundColor: color }} className="h-full rounded-full transition-all" />
       </div>
-      <span className="text-xs font-mono text-gray-600 min-w-[90px]">
-        {Math.round(used)} / {Math.round(total)} MB
-      </span>
+      <span className="text-[10px] font-mono text-gray-500 shrink-0">{Math.round(used)}/{Math.round(total)} MB</span>
     </div>
   )
 }
 
-function StatusBadge({ status }: { status: string }) {
-  const isOnline = status === 'online'
-  const isDone = status === 'done'
-  const isError = status === 'error'
-  const isPending = status === 'pending' || status === 'assigned'
-
-  let badgeClass = 'bg-gray-100 text-gray-700 border-gray-200'
-  let dotClass = 'bg-gray-400'
-
-  if (isOnline) {
-    badgeClass = 'bg-green-50 text-green-800 border-green-200'
-    dotClass = 'bg-green-500'
-  } else if (isDone) {
-    badgeClass = 'bg-blue-50 text-blue-800 border-blue-200'
-    dotClass = 'bg-blue-500'
-  } else if (isPending) {
-    badgeClass = 'bg-amber-50 text-amber-800 border-amber-200'
-    dotClass = 'bg-amber-500'
-  } else if (isError) {
-    badgeClass = 'bg-red-50 text-red-800 border-red-200'
-    dotClass = 'bg-red-500'
-  }
-
+function GpuBar({ pct }: { pct: number | null }) {
+  if (pct === null) return <span className="text-xs text-gray-400">—</span>
+  const color = pct > 80 ? '#dc2626' : pct > 40 ? '#d97706' : '#16a34a'
   return (
-    <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded text-xs font-medium border ${badgeClass}`}>
-      <span className={`w-1.5 h-1.5 rounded-full ${dotClass}`} />
-      {status.charAt(0).toUpperCase() + status.slice(1)}
+    <div className="flex items-center gap-1.5">
+      <div className="w-16 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+        <div style={{ width: `${Math.min(pct, 100)}%`, backgroundColor: color }} className="h-full rounded-full" />
+      </div>
+      <span className="text-[10px] font-mono text-gray-600">{pct.toFixed(0)}%</span>
+    </div>
+  )
+}
+
+function StatusDot({ status }: { status: string }) {
+  const map: Record<string, string> = {
+    online: 'bg-green-500', done: 'bg-blue-500', running: 'bg-blue-500',
+    assigned: 'bg-amber-500', pending: 'bg-amber-500', offline: 'bg-gray-400',
+    error: 'bg-red-500', stopped: 'bg-gray-400', stopping: 'bg-gray-400',
+  }
+  return (
+    <span className={`inline-flex items-center gap-1.5 text-xs font-medium`}>
+      <span className={`w-1.5 h-1.5 rounded-full ${map[status] || 'bg-gray-400'}`} />
+      {status}
     </span>
   )
 }
 
+// ─── Main Component ───────────────────────────────────────────────────────────
+
+type Tab = 'overview' | 'machines' | 'sessions' | 'users'
+
 export default function AdminDashboard() {
-  const [isAuthenticated, setIsAuthenticated] = useState(false)
-  const [passwordInput, setPasswordInput] = useState('')
-  const [authError, setAuthError] = useState('')
+  const { user, loading: authLoading } = useRequireAdmin()
+  const { token: jwtToken, logout } = useAuth()
+  const router = useRouter()
 
-  const [machines, setMachines] = useState<Machine[]>([])
-  const [jobs, setJobs] = useState<Job[]>([])
-  const [stats, setStats] = useState<Stats | null>(null)
-  const [lastRefresh, setLastRefresh] = useState<Date>(new Date())
-  const [loading, setLoading] = useState(true)
+  const [tab, setTab] = useState<Tab>('overview')
+  const [stats, setStats] = useState<DashboardStats | null>(null)
+  const [machines, setMachines] = useState<DashboardMachine[]>([])
+  const [sessions, setSessions] = useState<ActiveSession[]>([])
+  const [users, setUsers] = useState<ClusterUser[]>([])
+  const [dataLoading, setDataLoading] = useState(true)
+  const [lastRefresh, setLastRefresh] = useState(new Date())
 
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const savedAuth = sessionStorage.getItem('gpu_admin_auth')
-      if (savedAuth === 'true') {
-        setIsAuthenticated(true)
-      }
-    }
-  }, [])
+  // User management form state
+  const [showCreateUser, setShowCreateUser] = useState(false)
+  const [newUser, setNewUser] = useState({ email: '', password: '', max_vram_gb: 2, max_cpu_cores: 2, max_ram_gb: 4, is_admin: false })
+  const [editingUser, setEditingUser] = useState<ClusterUser | null>(null)
+  const [editQuota, setEditQuota] = useState({ max_vram_gb: 2, max_cpu_cores: 2, max_ram_gb: 4 })
+  const [actionMsg, setActionMsg] = useState('')
 
-  const handleLogin = (e: React.FormEvent) => {
-    e.preventDefault()
-    if (passwordInput === '123456') {
-      setIsAuthenticated(true)
-      setAuthError('')
-      if (typeof window !== 'undefined') {
-        sessionStorage.setItem('gpu_admin_auth', 'true')
-      }
-    } else {
-      setAuthError('Incorrect password. Please try again.')
-    }
-  }
-
-  const handleLogout = () => {
-    setIsAuthenticated(false)
-    setPasswordInput('')
-    if (typeof window !== 'undefined') {
-      sessionStorage.removeItem('gpu_admin_auth')
-    }
-  }
+  const authHeaders = useCallback(() => ({
+    'Content-Type': 'application/json',
+    ...(jwtToken ? { Authorization: `Bearer ${jwtToken}` } : {}),
+  }), [jwtToken])
 
   const fetchAll = useCallback(async () => {
-    if (!isAuthenticated) return
+    if (!jwtToken) return
     try {
-      const [mRes, jRes, sRes] = await Promise.all([
-        fetch(`${BACKEND_URL}/admin/machines`),
-        fetch(`${BACKEND_URL}/admin/jobs`),
-        fetch(`${BACKEND_URL}/admin/stats`),
+      const [dashRes, usersRes] = await Promise.all([
+        fetch(`${BACKEND_URL}/admin/dashboard`, { headers: authHeaders() }),
+        fetch(`${BACKEND_URL}/admin/users`, { headers: authHeaders() }),
       ])
-      if (mRes.ok) setMachines(await mRes.json())
-      if (jRes.ok) setJobs(await jRes.json())
-      if (sRes.ok) setStats(await sRes.json())
+      if (dashRes.ok) {
+        const d = await dashRes.json()
+        setStats(d.stats)
+        setMachines(d.machines)
+        setSessions(d.active_sessions)
+      }
+      if (usersRes.ok) {
+        setUsers(await usersRes.json())
+      }
       setLastRefresh(new Date())
     } catch (e) {
-      console.error('Admin fetch failed:', e)
+      console.error('Dashboard fetch failed:', e)
     } finally {
-      setLoading(false)
+      setDataLoading(false)
     }
-  }, [isAuthenticated])
+  }, [jwtToken, authHeaders])
 
   useEffect(() => {
-    if (isAuthenticated) {
+    fetchAll()
+    const interval = setInterval(fetchAll, 10000)
+    return () => clearInterval(interval)
+  }, [fetchAll])
+
+  const terminateSession = async (jobId: number) => {
+    await fetch(`${BACKEND_URL}/admin/sessions/${jobId}/terminate`, {
+      method: 'POST', headers: authHeaders()
+    })
+    setActionMsg(`Session #${jobId} terminated`)
+    fetchAll()
+  }
+
+  const createUser = async () => {
+    const res = await fetch(`${BACKEND_URL}/admin/users`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify(newUser),
+    })
+    if (res.ok) {
+      setShowCreateUser(false)
+      setNewUser({ email: '', password: '', max_vram_gb: 2, max_cpu_cores: 2, max_ram_gb: 4, is_admin: false })
+      setActionMsg('User created successfully')
       fetchAll()
-      const interval = setInterval(fetchAll, 5000)
-      return () => clearInterval(interval)
+    } else {
+      const err = await res.json()
+      setActionMsg(`Error: ${err.detail}`)
     }
-  }, [fetchAll, isAuthenticated])
+  }
 
-  if (!isAuthenticated) {
+  const saveUserQuota = async () => {
+    if (!editingUser) return
+    await fetch(`${BACKEND_URL}/admin/users/${editingUser.id}`, {
+      method: 'PUT',
+      headers: authHeaders(),
+      body: JSON.stringify(editQuota),
+    })
+    setEditingUser(null)
+    setActionMsg('User quota updated')
+    fetchAll()
+  }
+
+  const toggleUserActive = async (u: ClusterUser) => {
+    await fetch(`${BACKEND_URL}/admin/users/${u.id}`, {
+      method: 'PUT',
+      headers: authHeaders(),
+      body: JSON.stringify({ is_active: !u.is_active }),
+    })
+    setActionMsg(`User ${u.is_active ? 'deactivated' : 'activated'}`)
+    fetchAll()
+  }
+
+  const deleteUser = async (u: ClusterUser) => {
+    if (!confirm(`Delete ${u.email}? This will terminate their active session.`)) return
+    await fetch(`${BACKEND_URL}/admin/users/${u.id}`, { method: 'DELETE', headers: authHeaders() })
+    setActionMsg(`User ${u.email} deleted`)
+    fetchAll()
+  }
+
+  const handleLogout = () => { logout(); router.replace('/login') }
+
+  if (authLoading || !user) {
     return (
-      <div className="min-h-screen bg-[#fcfcfd] text-gray-900 flex flex-col justify-center items-center px-4">
-        <div className="bg-white border border-gray-200/80 rounded-xl p-8 max-w-md w-full shadow-xs space-y-6">
-          <div className="text-center space-y-2">
-            <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-[#bb432c]/10 text-[#bb432c] mb-1">
-              <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-              </svg>
-            </div>
-            <h1 className="text-xl font-bold text-gray-900 tracking-tight">
-              Admin Authentication
-            </h1>
-            <p className="text-xs text-gray-500">
-              Enter the administrator password to access the cluster control panel.
-            </p>
-          </div>
-
-          <form onSubmit={handleLogin} className="space-y-4">
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-gray-700 mb-1.5">
-                Admin Password
-              </label>
-              <input
-                type="password"
-                placeholder="Enter password..."
-                value={passwordInput}
-                onChange={e => setPasswordInput(e.target.value)}
-                autoFocus
-                className="w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-gray-900 placeholder-gray-400 focus:outline-none focus:border-[#bb432c] focus:ring-1 focus:ring-[#bb432c] font-mono text-sm transition"
-              />
-            </div>
-
-            {authError && (
-              <div className="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium text-center">
-                {authError}
-              </div>
-            )}
-
-            <button
-              type="submit"
-              className="w-full py-2.5 bg-[#bb432c] hover:bg-[#9c3622] text-white font-semibold text-sm rounded-lg transition-colors shadow-xs cursor-pointer"
-            >
-              Sign In
-            </button>
-          </form>
-
-          <div className="text-center pt-2 border-t border-gray-100">
-            <Link href="/" className="text-xs text-gray-500 hover:text-gray-900 transition">
-              ← Return to Rent Page
-            </Link>
-          </div>
-        </div>
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="w-6 h-6 rounded-full border-2 border-[#bb432c] border-t-transparent animate-spin" />
       </div>
     )
   }
 
-  const activeJobs = jobs.filter(j => ['pending', 'assigned', 'done'].includes(j.status) && j.jupyter_url)
-  const recentJobs = jobs.slice(0, 20)
+  const tabs: { id: Tab; label: string; count?: number }[] = [
+    { id: 'overview', label: 'Overview' },
+    { id: 'machines', label: 'Machines', count: machines.length },
+    { id: 'sessions', label: 'Active Sessions', count: sessions.length },
+    { id: 'users', label: 'Users', count: users.length },
+  ]
 
   return (
-    <div className="min-h-screen bg-[#fcfcfd] text-gray-900 flex flex-col">
-      {/* Admin Header */}
-      <header className="bg-white border-b border-gray-200/80 px-4 sm:px-6 h-14 flex justify-between items-center sticky top-0 z-50 shadow-xs">
-        <div className="flex items-center gap-3">
-          <Link href="/" className="flex items-center gap-2.5 text-decoration-none group">
-            {/* Unique Kinetic Dynamic Symbol */}
-            <svg className="w-7 h-7 transition-transform duration-300 group-hover:scale-105" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <rect width="32" height="32" rx="7" fill="#111827" />
-              <path d="M8 8L16 16L8 24" stroke="#ffffff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.4" />
-              <path d="M14 8L22 16L14 24" stroke="#bb432c" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-              <circle cx="23.5" cy="16" r="2" fill="#bb432c" />
-            </svg>
-            <span className="font-bold text-lg tracking-tight text-gray-900">
-              Kinetic
-            </span>
-          </Link>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <span className="text-xs text-gray-500 hidden sm:inline">
-            Auto-refresh: 5s · Last: {lastRefresh.toLocaleTimeString()}
-          </span>
-          <button
-            onClick={fetchAll}
-            className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 border border-gray-300 text-gray-700 text-xs font-medium rounded-md transition cursor-pointer"
-          >
-            Refresh
-          </button>
-          <button
-            onClick={handleLogout}
-            className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 text-xs font-medium rounded-md transition cursor-pointer"
-          >
-            Sign Out
-          </button>
+    <div className="min-h-screen bg-[#fcfcfd] text-gray-900">
+      {/* Nav */}
+      <header className="bg-white border-b border-gray-200/80 sticky top-0 z-50">
+        <div className="max-w-7xl mx-auto px-4 h-14 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Link href="/" className="flex items-center gap-2">
+              <svg className="w-7 h-7" viewBox="0 0 32 32" fill="none">
+                <rect width="32" height="32" rx="7" fill="#111827" />
+                <path d="M8 8L16 16L8 24" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.4" />
+                <path d="M14 8L22 16L14 24" stroke="#bb432c" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                <circle cx="23.5" cy="16" r="2" fill="#bb432c" />
+              </svg>
+              <span className="font-bold text-lg tracking-tight">Kinetic</span>
+            </Link>
+            <span className="text-gray-300">·</span>
+            <span className="text-sm font-semibold text-gray-600">Admin Console</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-gray-500">Last refresh: {lastRefresh.toLocaleTimeString()}</span>
+            <button onClick={fetchAll} className="text-xs px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-lg font-medium transition">↻ Refresh</button>
+            <button onClick={handleLogout} className="text-xs px-3 py-1.5 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition">Sign out</button>
+          </div>
         </div>
       </header>
 
-      {/* Main Admin Content */}
-      <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-8 space-y-6">
-        {/* Quick Stats Grid */}
-        {stats && (
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            <div className="bg-white border border-gray-200/80 rounded-xl p-4 shadow-xs">
-              <div className="text-xs font-semibold uppercase tracking-wider text-gray-500">Online Machines</div>
-              <div className="text-2xl font-bold text-emerald-600 mt-1">{stats.online_machines} <span className="text-xs font-normal text-gray-500">/ {stats.total_machines}</span></div>
+      <div className="max-w-7xl mx-auto px-4 py-6 space-y-5">
+
+        {/* Action message */}
+        {actionMsg && (
+          <div className="flex items-center justify-between px-4 py-2.5 bg-emerald-50 border border-emerald-200 rounded-lg text-sm text-emerald-800">
+            {actionMsg}
+            <button onClick={() => setActionMsg('')} className="text-emerald-600 hover:text-emerald-900">✕</button>
+          </div>
+        )}
+
+        {/* Tabs */}
+        <div className="flex gap-1 border-b border-gray-200">
+          {tabs.map(t => (
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              className={`px-4 py-2.5 text-sm font-medium border-b-2 transition -mb-px ${
+                tab === t.id ? 'border-[#bb432c] text-[#bb432c]' : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              {t.label}
+              {t.count !== undefined && (
+                <span className={`ml-1.5 px-1.5 py-0.5 rounded text-[10px] font-bold ${tab === t.id ? 'bg-[#bb432c]/10 text-[#bb432c]' : 'bg-gray-100 text-gray-500'}`}>
+                  {t.count}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+
+        {/* ── OVERVIEW TAB ── */}
+        {tab === 'overview' && stats && (
+          <div className="space-y-5">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              {[
+                { label: 'Online Machines', value: `${stats.online_machines} / ${stats.total_machines}`, sub: `${stats.offline_machines} offline`, color: stats.online_machines > 0 ? 'text-green-600' : 'text-gray-500' },
+                { label: 'Active Sessions', value: stats.active_sessions, sub: 'running now', color: 'text-blue-600' },
+                { label: 'Total Users', value: stats.total_users, sub: 'registered', color: 'text-gray-900' },
+                { label: 'VRAM Used', value: `${Math.round(stats.used_vram_mb / 1024 * 10) / 10} GB`, sub: `of ${Math.round(stats.total_vram_mb / 1024 * 10) / 10} GB total`, color: 'text-[#bb432c]' },
+              ].map(card => (
+                <div key={card.label} className="bg-white rounded-xl border border-gray-200 p-5">
+                  <div className="text-xs text-gray-500 font-medium uppercase tracking-wide">{card.label}</div>
+                  <div className={`text-2xl font-bold mt-1 ${card.color}`}>{card.value}</div>
+                  <div className="text-xs text-gray-400 mt-0.5">{card.sub}</div>
+                </div>
+              ))}
             </div>
-            <div className="bg-white border border-gray-200/80 rounded-xl p-4 shadow-xs">
-              <div className="text-xs font-semibold uppercase tracking-wider text-gray-500">Active Workspaces</div>
-              <div className="text-2xl font-bold text-gray-900 mt-1">{stats.active_renters}</div>
-            </div>
-            <div className="bg-white border border-gray-200/80 rounded-xl p-4 shadow-xs">
-              <div className="text-xs font-semibold uppercase tracking-wider text-gray-500">Total VRAM Mesh</div>
-              <div className="text-2xl font-bold text-gray-900 mt-1">{(stats.total_vram_mb / 1024).toFixed(1)} GB</div>
-            </div>
-            <div className="bg-white border border-gray-200/80 rounded-xl p-4 shadow-xs">
-              <div className="text-xs font-semibold uppercase tracking-wider text-gray-500">VRAM In Use</div>
-              <div className="text-2xl font-bold text-[#bb432c] mt-1">{(stats.used_vram_mb / 1024).toFixed(1)} GB</div>
+
+            {/* VRAM overview bar */}
+            {stats.total_vram_mb > 0 && (
+              <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-2">
+                <div className="flex justify-between text-sm font-medium text-gray-700">
+                  <span>Cluster VRAM Utilization</span>
+                  <span>{Math.round(stats.used_vram_mb / stats.total_vram_mb * 100)}%</span>
+                </div>
+                <VramBar used={stats.used_vram_mb} total={stats.total_vram_mb} />
+              </div>
+            )}
+
+            {/* Quick shortcuts */}
+            <div className="grid grid-cols-2 gap-3">
+              <button onClick={() => setTab('users')} className="bg-white border border-gray-200 rounded-xl p-4 text-left hover:border-[#bb432c]/30 hover:bg-[#bb432c]/5 transition group">
+                <div className="text-sm font-semibold text-gray-900 group-hover:text-[#bb432c]">Manage Users →</div>
+                <div className="text-xs text-gray-500 mt-0.5">Create users, set quotas, deactivate accounts</div>
+              </button>
+              <button onClick={() => setTab('sessions')} className="bg-white border border-gray-200 rounded-xl p-4 text-left hover:border-[#bb432c]/30 hover:bg-[#bb432c]/5 transition group">
+                <div className="text-sm font-semibold text-gray-900 group-hover:text-[#bb432c]">View Sessions →</div>
+                <div className="text-xs text-gray-500 mt-0.5">Monitor active workloads, GPU activity, terminate</div>
+              </button>
             </div>
           </div>
         )}
 
-        {/* Machines Table */}
-        <div className="bg-white border border-gray-200/80 rounded-xl overflow-hidden shadow-xs">
-          <div className="px-5 py-3.5 border-b border-gray-200/80 bg-gray-50/80 flex items-center justify-between">
-            <div className="font-semibold text-sm text-gray-900">
-              Registered Provider Nodes ({machines.length})
-            </div>
+        {/* ── MACHINES TAB ── */}
+        {tab === 'machines' && (
+          <div className="space-y-3">
+            {machines.length === 0 ? (
+              <div className="bg-white border border-gray-200 rounded-xl p-8 text-center text-gray-400 text-sm">No machines registered yet.</div>
+            ) : machines.map(m => (
+              <div key={m.id} className="bg-white border border-gray-200 rounded-xl p-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <StatusDot status={m.status} />
+                      <span className="text-xs text-gray-500 font-mono">{m.id}</span>
+                    </div>
+                    <div className="text-xs text-gray-500">IP: <span className="font-mono">{m.tailscale_ip}</span> · CPUs: {m.cpus} · RAM: {m.shared_ram_gb} GB</div>
+                    <div className="text-[11px] text-gray-400">Heartbeat: {fmt(m.last_heartbeat_seconds_ago)}</div>
+                  </div>
+                  <div className="space-y-2 min-w-[200px]">
+                    <div className="text-[10px] text-gray-500 uppercase tracking-wide font-semibold">VRAM</div>
+                    <VramBar used={m.vram_used_mb} total={m.vram_total_mb} />
+                    <div className="text-[10px] text-gray-500 uppercase tracking-wide font-semibold mt-1">GPU Utilization</div>
+                    <GpuBar pct={m.gpu_utilization_percent} />
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
+        )}
 
-          {loading ? (
-            <div className="p-8 text-center text-sm text-gray-500">Loading nodes...</div>
-          ) : machines.length === 0 ? (
-            <div className="p-8 text-center text-sm text-gray-500">
-              No nodes registered. Run the host agent to onboard a GPU.
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs border-collapse">
-                <thead>
-                  <tr className="border-b border-gray-200 bg-gray-50/50 text-gray-600 uppercase tracking-wider font-semibold">
-                    <th className="py-2.5 px-4">Node ID</th>
-                    <th className="py-2.5 px-4">Status</th>
-                    <th className="py-2.5 px-4">Tailscale IP</th>
-                    <th className="py-2.5 px-4">CPUs</th>
-                    <th className="py-2.5 px-4 min-w-[220px]">VRAM Allocation</th>
-                    <th className="py-2.5 px-4">Last Seen</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {machines.map(m => (
-                    <tr key={m.id} className="hover:bg-gray-50/80 transition-colors">
-                      <td className="py-3 px-4 font-mono font-medium text-gray-900">{m.id}</td>
-                      <td className="py-3 px-4"><StatusBadge status={m.status} /></td>
-                      <td className="py-3 px-4 font-mono text-gray-600">{m.tailscale_ip || '—'}</td>
-                      <td className="py-3 px-4 text-gray-700">{m.cpus || '—'} Cores</td>
-                      <td className="py-3 px-4">
-                        <VramBar used={m.vram_used_mb} total={m.vram_total_mb} />
-                      </td>
-                      <td className="py-3 px-4 text-gray-500">
-                        {formatSeconds(m.last_heartbeat_seconds_ago)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-
-        {/* Sessions / Jobs Table */}
-        <div className="bg-white border border-gray-200/80 rounded-xl overflow-hidden shadow-xs">
-          <div className="px-5 py-3.5 border-b border-gray-200/80 bg-gray-50/80 flex items-center justify-between">
-            <div className="font-semibold text-sm text-gray-900">
-              Active & Recent Workspaces ({activeJobs.length} active)
-            </div>
+        {/* ── SESSIONS TAB ── */}
+        {tab === 'sessions' && (
+          <div className="space-y-3">
+            {sessions.length === 0 ? (
+              <div className="bg-white border border-gray-200 rounded-xl p-8 text-center text-gray-400 text-sm">No active sessions.</div>
+            ) : sessions.map(s => (
+              <div key={s.job_id} className="bg-white border border-gray-200 rounded-xl p-4 flex items-start justify-between gap-4">
+                <div className="space-y-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <StatusDot status={s.status} />
+                    <span className="text-xs font-semibold text-gray-900">{s.user_email}</span>
+                    <span className="text-[10px] text-gray-400 font-mono">job #{s.job_id}</span>
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    Machine: <span className="font-mono">{s.machine_id}</span> · {s.vram_required_mb} MB VRAM · {s.cpu_cores} CPUs · {s.ram_gb} GB RAM
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="text-[11px] text-gray-400">Running: {fmtDur(s.started_seconds_ago)}</span>
+                    <GpuBar pct={s.gpu_utilization_percent} />
+                  </div>
+                  {s.jupyter_url && (
+                    <a href={s.jupyter_url} target="_blank" rel="noopener noreferrer" className="text-[11px] text-blue-600 hover:underline truncate block">
+                      {s.jupyter_url}
+                    </a>
+                  )}
+                </div>
+                <button
+                  onClick={() => terminateSession(s.job_id)}
+                  className="shrink-0 px-3 py-1.5 bg-red-50 border border-red-200 text-red-700 hover:bg-red-100 text-xs font-semibold rounded-lg transition"
+                >
+                  Terminate
+                </button>
+              </div>
+            ))}
           </div>
+        )}
 
-          {loading ? (
-            <div className="p-8 text-center text-sm text-gray-500">Loading jobs...</div>
-          ) : recentJobs.length === 0 ? (
-            <div className="p-8 text-center text-sm text-gray-500">
-              No jobs dispatched yet.
+        {/* ── USERS TAB ── */}
+        {tab === 'users' && (
+          <div className="space-y-4">
+            {/* Create user button */}
+            <div className="flex justify-end">
+              <button
+                onClick={() => setShowCreateUser(!showCreateUser)}
+                className="px-4 py-2 bg-[#bb432c] hover:bg-[#a33a25] text-white text-sm font-semibold rounded-lg transition"
+              >
+                {showCreateUser ? 'Cancel' : '+ Create User'}
+              </button>
             </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs border-collapse">
-                <thead>
-                  <tr className="border-b border-gray-200 bg-gray-50/50 text-gray-600 uppercase tracking-wider font-semibold">
-                    <th className="py-2.5 px-4">Job ID</th>
-                    <th className="py-2.5 px-4">Assigned Node</th>
-                    <th className="py-2.5 px-4">Status</th>
-                    <th className="py-2.5 px-4">Resources</th>
-                    <th className="py-2.5 px-4">VRAM</th>
-                    <th className="py-2.5 px-4">Uptime</th>
-                    <th className="py-2.5 px-4">Notebook Link</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {recentJobs.map(j => (
-                    <tr key={j.id} className="hover:bg-gray-50/80 transition-colors">
-                      <td className="py-3 px-4 font-mono font-medium text-gray-800">#{j.id}</td>
-                      <td className="py-3 px-4 font-mono text-gray-600">{j.machine_id || '—'}</td>
-                      <td className="py-3 px-4"><StatusBadge status={j.status} /></td>
-                      <td className="py-3 px-4 text-gray-700">{j.cpu_cores ?? '?'} CPU · {j.ram_gb ?? '?'} GB RAM</td>
-                      <td className="py-3 px-4 font-mono text-gray-700">{j.vram_required_mb ? `${Math.round(j.vram_required_mb)} MB` : '—'}</td>
-                      <td className="py-3 px-4 text-gray-500">{formatDuration(j.started_seconds_ago)}</td>
-                      <td className="py-3 px-4">
-                        {j.jupyter_url ? (
-                          <a
-                            href={j.jupyter_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 text-[#bb432c] hover:text-[#9c3622] font-medium underline"
-                          >
-                            Open
-                          </a>
-                        ) : (
-                          <span className="text-gray-400">—</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      </main>
+
+            {/* Create user form */}
+            {showCreateUser && (
+              <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-4">
+                <h3 className="text-sm font-bold text-gray-900">New User</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-semibold text-gray-600">Email</label>
+                    <input type="email" value={newUser.email} onChange={e => setNewUser(p => ({ ...p, email: e.target.value }))}
+                      className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#bb432c]/30" placeholder="user@example.com" />
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-gray-600">Password</label>
+                    <input type="password" value={newUser.password} onChange={e => setNewUser(p => ({ ...p, password: e.target.value }))}
+                      className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#bb432c]/30" placeholder="••••••••" />
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-gray-600">Max VRAM (GB)</label>
+                    <input type="number" min={1} max={80} value={newUser.max_vram_gb} onChange={e => setNewUser(p => ({ ...p, max_vram_gb: +e.target.value }))}
+                      className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#bb432c]/30" />
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-gray-600">Max CPU Cores</label>
+                    <input type="number" min={1} max={64} value={newUser.max_cpu_cores} onChange={e => setNewUser(p => ({ ...p, max_cpu_cores: +e.target.value }))}
+                      className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#bb432c]/30" />
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-gray-600">Max RAM (GB)</label>
+                    <input type="number" min={1} max={128} value={newUser.max_ram_gb} onChange={e => setNewUser(p => ({ ...p, max_ram_gb: +e.target.value }))}
+                      className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#bb432c]/30" />
+                  </div>
+                  <div className="flex items-center gap-2 mt-4">
+                    <input type="checkbox" id="is_admin" checked={newUser.is_admin} onChange={e => setNewUser(p => ({ ...p, is_admin: e.target.checked }))} className="accent-[#bb432c]" />
+                    <label htmlFor="is_admin" className="text-xs font-semibold text-gray-600">Grant admin access</label>
+                  </div>
+                </div>
+                <button onClick={createUser} className="px-5 py-2 bg-[#bb432c] hover:bg-[#a33a25] text-white text-sm font-semibold rounded-lg transition">
+                  Create User
+                </button>
+              </div>
+            )}
+
+            {/* User list */}
+            {users.length === 0 ? (
+              <div className="bg-white border border-gray-200 rounded-xl p-8 text-center text-gray-400 text-sm">No users yet.</div>
+            ) : users.map(u => (
+              <div key={u.id} className={`bg-white border rounded-xl p-4 space-y-2 ${u.is_active ? 'border-gray-200' : 'border-gray-100 opacity-60'}`}>
+                <div className="flex items-start justify-between gap-3 flex-wrap">
+                  <div className="space-y-0.5">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-sm font-semibold text-gray-900">{u.email}</span>
+                      {u.is_admin && <span className="px-1.5 py-0.5 bg-[#bb432c]/10 text-[#bb432c] text-[10px] font-bold rounded">Admin</span>}
+                      {!u.is_active && <span className="px-1.5 py-0.5 bg-gray-100 text-gray-500 text-[10px] font-bold rounded">Inactive</span>}
+                    </div>
+                    <div className="text-xs text-gray-500 font-mono">
+                      Quota: {u.max_vram_gb}GB VRAM · {u.max_cpu_cores} CPU · {u.max_ram_gb}GB RAM
+                    </div>
+                    {u.active_session ? (
+                      <div className="text-xs text-blue-600">
+                        Session #{u.active_session.job_id} · {u.active_session.status} · {fmtDur(u.active_session.started_seconds_ago)}
+                      </div>
+                    ) : (
+                      <div className="text-xs text-gray-400">No active session</div>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      onClick={() => { setEditingUser(u); setEditQuota({ max_vram_gb: u.max_vram_gb, max_cpu_cores: u.max_cpu_cores, max_ram_gb: u.max_ram_gb }) }}
+                      className="px-3 py-1.5 text-xs font-semibold border border-gray-200 hover:border-gray-300 rounded-lg transition"
+                    >
+                      Edit Quota
+                    </button>
+                    <button
+                      onClick={() => toggleUserActive(u)}
+                      className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition ${u.is_active ? 'border-amber-200 text-amber-700 hover:bg-amber-50' : 'border-green-200 text-green-700 hover:bg-green-50'}`}
+                    >
+                      {u.is_active ? 'Deactivate' : 'Activate'}
+                    </button>
+                    <button
+                      onClick={() => deleteUser(u)}
+                      className="px-3 py-1.5 text-xs font-semibold border border-red-200 text-red-700 hover:bg-red-50 rounded-lg transition"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+
+                {/* Inline quota editor */}
+                {editingUser?.id === u.id && (
+                  <div className="mt-3 pt-3 border-t border-gray-100 grid grid-cols-3 gap-3">
+                    {(['max_vram_gb', 'max_cpu_cores', 'max_ram_gb'] as const).map(key => (
+                      <div key={key}>
+                        <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">
+                          {key === 'max_vram_gb' ? 'VRAM (GB)' : key === 'max_cpu_cores' ? 'CPU Cores' : 'RAM (GB)'}
+                        </label>
+                        <input
+                          type="number" min={1}
+                          value={editQuota[key]}
+                          onChange={e => setEditQuota(p => ({ ...p, [key]: +e.target.value }))}
+                          className="mt-1 w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#bb432c]/30"
+                        />
+                      </div>
+                    ))}
+                    <div className="col-span-3 flex gap-2">
+                      <button onClick={saveUserQuota} className="px-4 py-1.5 bg-[#bb432c] text-white text-xs font-semibold rounded-lg hover:bg-[#a33a25] transition">Save</button>
+                      <button onClick={() => setEditingUser(null)} className="px-4 py-1.5 border border-gray-200 text-xs font-semibold rounded-lg hover:bg-gray-50 transition">Cancel</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
