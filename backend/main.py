@@ -27,23 +27,21 @@ from auth import (
 
 from sqlalchemy import text
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 app = FastAPI(title="Kinetic GPU Cluster Backend")
 
 # ---------------------------------------------------------------------------
-# CORS
+# CORS — Allow all origins / servers (supports credentials and any domain/IP)
 # ---------------------------------------------------------------------------
-_ALLOWED_ORIGINS = [
-    o.strip()
-    for o in os.environ.get(
-        "ALLOWED_ORIGINS",
-        "https://gpu-share-three.vercel.app,http://localhost:3000,http://localhost:3001"
-    ).split(",")
-    if o.strip()
-]
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_ALLOWED_ORIGINS,
+    allow_origins=[],
+    allow_origin_regex=r".*",
     allow_methods=["*"],
     allow_headers=["*"],
     allow_credentials=True,   # needed for Bearer token flow

@@ -44,7 +44,8 @@ SYSTEM_ARCHITECTURE.md
 **dist
 **build
 **release
-
+todo.txt
+*.db
 
 host-agent/host_config.json
 host-agent/.env
