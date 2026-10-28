@@ -13,7 +13,8 @@ if DATABASE_URL:
     engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 else:
     # Safe SQLite fallback for local development or when Postgres is waking up
-    DATABASE_URL = "sqlite:///./gpu_share.db"
+    db_file = os.path.join(os.path.dirname(__file__), "gpu_share.db")
+    DATABASE_URL = f"sqlite:///{db_file}"
     engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

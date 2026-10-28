@@ -1,0 +1,21 @@
+[project]
+name = "gpu-share-backend"
+version = "0.1.0"
+description = "Kinetic GPU Cluster Backend"
+requires-python = ">=3.9"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "pydantic",
+    "sqlalchemy",
+    "psycopg2-binary",
+    "requests",
+    "httpx",
+    "python-jose[cryptography]",
+    "passlib[bcrypt]",
+    "bcrypt",
+    "python-dotenv",
+]
+
+[tool.fastapi]
+entrypoint = "main:app"
