@@ -1,7 +1,10 @@
 from sqlalchemy import Column, ForeignKey, Integer, String, Float, DateTime, Boolean
 from sqlalchemy.orm import relationship
 import datetime
-from database import Base
+try:
+    from database import Base
+except ImportError:
+    from backend.database import Base
 
 
 class User(Base):

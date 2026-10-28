@@ -11,8 +11,12 @@ import bcrypt
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
-from database import SessionLocal
-import models
+try:
+    from database import SessionLocal
+    import models
+except ImportError:
+    from backend.database import SessionLocal
+    from backend import models
 
 # ---------------------------------------------------------------------------
 # Config

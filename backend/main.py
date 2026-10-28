@@ -1,3 +1,10 @@
+import sys
+import os
+
+_backend_dir = os.path.dirname(os.path.abspath(__file__))
+if _backend_dir not in sys.path:
+    sys.path.insert(0, _backend_dir)
+
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
@@ -6,7 +13,6 @@ from sqlalchemy.orm import Session
 import datetime
 import uvicorn
 import uuid
-import os
 import pathlib
 import asyncio
 from typing import Optional, List
@@ -18,12 +24,20 @@ except ImportError:
     import requests as http_requests
     HTTPX_AVAILABLE = False
 
-from database import engine, SessionLocal, Base
-import models
-from auth import (
-    hash_password, verify_password, create_access_token,
-    get_current_user, get_current_admin,
-)
+try:
+    from database import engine, SessionLocal, Base
+    import models
+    from auth import (
+        hash_password, verify_password, create_access_token,
+        get_current_user, get_current_admin,
+    )
+except ImportError:
+    from backend.database import engine, SessionLocal, Base
+    from backend import models
+    from backend.auth import (
+        hash_password, verify_password, create_access_token,
+        get_current_user, get_current_admin,
+    )
 
 from sqlalchemy import text
 
